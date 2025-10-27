@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-group-control",
-  "description": "Koishi 机器人进群/退群事件处理插件，支持自定义机器人进群消息、踢出后自动拉黑功能、自定义提示消息和主动退群指令。",
-  "version": "0.0.1",
+  "description": "Koishi 机器人进群/退群事件处理插件，支持自定义机器人进群消息、踢出后自动拉黑功能和主动退群指令。(仅支持Onebot协议)",
+  "version": "0.0.4",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -13,12 +13,9 @@
     "koishi",
     "plugin",
     "group",
-    "control",
     "join",
     "leave",
     "blacklist",
-    "welcome-message",
-    "quit-command",
     "onebot",
     "qq"
   ],
