@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-group-control",
   "description": "Koishi群聊自管理插件，支持自定义机器人进群消息、被踢出自动拉黑、刷屏自动屏蔽功能和主动退群指令。(仅支持OneBot适配器)",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
