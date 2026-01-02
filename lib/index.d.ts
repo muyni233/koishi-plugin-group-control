@@ -46,6 +46,14 @@ export interface GroupConfig {
     quitCommandEnabled: boolean;
     quitCommandAuthority: number;
 }
+export interface GroupInviteConfig {
+    enabled: boolean;
+    adminQQs: string[];
+    inviteWaitMessage: string;
+    inviteRequestMessage: string;
+    autoApprove: boolean;
+    showDetailedLog: boolean;
+}
 export interface FrequencyConfig {
     enabled: boolean;
     limit: number;
@@ -60,6 +68,7 @@ export interface FrequencyConfig {
 export interface Config {
     basic: GroupConfig;
     frequency: FrequencyConfig;
+    invite: GroupInviteConfig;
 }
 export declare const Config: Schema<Config>;
 export declare function apply(ctx: Context, config: Config): void;
