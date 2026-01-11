@@ -6,4 +6,4 @@ Koishi群聊自管理插件，支持自定义机器人进群消息、被踢出�
 
 #### 仅支持Onebot协议
 
-> 使用Qwen3-Coder协助完成
+> 使用 Qwen3-Coder & Gemini-3-Pro-Preview 协助完成

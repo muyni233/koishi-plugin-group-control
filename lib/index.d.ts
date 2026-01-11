@@ -49,6 +49,7 @@ export interface GroupConfig {
 export interface GroupInviteConfig {
     enabled: boolean;
     adminQQs: string[];
+    notificationGroupId: string;
     inviteWaitMessage: string;
     inviteRequestMessage: string;
     autoApprove: boolean;
