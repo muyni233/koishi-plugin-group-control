@@ -31,7 +31,7 @@ export declare function apply(ctx: Context): void;
 export declare const BLACKLIST_PLATFORM = "onebot";
 export declare function getBlacklistedGuild(ctx: Context, guildId: string): Promise<BlacklistedGuild[]>;
 export declare function removeBlacklistedGuild(ctx: Context, guildId: string): Promise<import("minato").Driver.WriteResult>;
-export declare function createBlacklistedGuild(ctx: Context, guildId: string, reason: string): Promise<BlacklistedGuild>;
+export declare function createBlacklistedGuild(ctx: Context, guildId: string, reason: string): Promise<import("minato").Driver.WriteResult>;
 export declare function getAllBlacklistedGuilds(ctx: Context): Promise<BlacklistedGuild[]>;
 export declare function clearBlacklistedGuilds(ctx: Context): Promise<import("minato").Driver.WriteResult>;
 export declare function getCommandFrequencyRecord(ctx: Context, platform: string, guildId: string): Promise<CommandFrequencyRecord>;

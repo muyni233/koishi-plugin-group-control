@@ -5,13 +5,13 @@ export interface GroupConfig {
     quitMessage: string;
     enableBlacklist: boolean;
     quitCommandEnabled: boolean;
-    quitCommandAuthority: number;
     notifyAdminOnKick: boolean;
     kickNotificationMessage: string;
     smallGroupAutoQuit: boolean;
     smallGroupThreshold: number;
     smallGroupQuitMessage: string;
     smallGroupNotifyAdmin: boolean;
+    smallGroupCheckDelay: number;
 }
 export interface GroupInviteConfig {
     enabled: boolean;
@@ -37,12 +37,17 @@ export interface BotSwitchConfig {
     enabled: boolean;
     defaultState: boolean;
     disabledMessage: string;
-    toggleAuthority: number;
+}
+export interface PermissionConfig {
+    mode: 'koishi' | 'builtin';
+    koishiAuthority: number;
+    protectedCommands: string[];
 }
 export interface Config {
     basic: GroupConfig;
     frequency: FrequencyConfig;
     invite: GroupInviteConfig;
     botSwitch: BotSwitchConfig;
+    permission: PermissionConfig;
 }
 export declare const Config: Schema<Config>;

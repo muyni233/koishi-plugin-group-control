@@ -23,6 +23,7 @@ export interface GroupBotStatus {
     botEnabled: boolean
 }
 
+
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild
@@ -69,12 +70,12 @@ export async function removeBlacklistedGuild(ctx: Context, guildId: string) {
 }
 
 export async function createBlacklistedGuild(ctx: Context, guildId: string, reason: string) {
-    return await ctx.model.create('blacklisted_guild', {
+    return await ctx.model.upsert('blacklisted_guild', [{
         platform: BLACKLIST_PLATFORM,
         guildId,
         timestamp: Math.floor(Date.now() / 1000),
         reason
-    });
+    }]);
 }
 
 export async function getAllBlacklistedGuilds(ctx: Context) {

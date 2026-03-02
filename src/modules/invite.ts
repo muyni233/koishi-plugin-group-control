@@ -6,17 +6,39 @@ export const name = 'group-control-invite'
 export function apply(ctx: Context, config: Config) {
     if (!config.invite.enabled) return;
 
-    const pendingInvites = new Map<string, { groupId: string, userId: string, userName: string, time: number, flag: string }>();
+    // 存储待处理的邀请，key 为 groupId
+    const pendingInvites = new Map<string, {
+        groupId: string
+        userId: string
+        userName: string
+        groupName: string
+        time: number
+        flag: string
+    }>();
+
+    // 定期清理超时的邀请（10分钟超时）
+    const INVITE_TIMEOUT = 10 * 60 * 1000;
+    setInterval(() => {
+        const now = Date.now();
+        for (const [key, invite] of pendingInvites) {
+            if (now - invite.time > INVITE_TIMEOUT) {
+                pendingInvites.delete(key);
+                if (config.invite.showDetailedLog) {
+                    console.log(`邀请超时已清理: 群号=${invite.groupId}, 邀请者=${invite.userId}`);
+                }
+            }
+        }
+    }, 60 * 1000);
 
     // 监听群聊邀请事件
     ctx.on('guild-request', async (session) => {
-        // 【关键修复】直接从原始数据获取 ID，避免被 Koishi 截断或映射
+        // 直接从原始数据获取 ID
         const raw = (session as any).original || (session as any).raw || (session.event as any)?._data || {};
 
         // 提取 flag
         const flag = raw.flag || (session as any).flag || session.messageId;
 
-        // 提取真实的 user_id 和 group_id (转换为字符串，防止精度丢失)
+        // 提取真实的 user_id 和 group_id
         const rawUserId = raw.user_id ? String(raw.user_id) : session.userId;
         const rawGroupId = raw.group_id ? String(raw.group_id) : session.guildId;
 
@@ -42,7 +64,6 @@ export function apply(ctx: Context, config: Config) {
         // 获取群信息
         let groupName = rawGroupId;
         try {
-            // 尝试获取群信息，注意这里的 rawGroupId 应该是真实的群号
             const guildInfo = await session.bot.getGuild(rawGroupId) as any;
             groupName = guildInfo?.name || guildInfo?.group_name || rawGroupId;
         } catch (error) {
@@ -52,12 +73,11 @@ export function apply(ctx: Context, config: Config) {
         // 发送等待审核提示给邀请者
         try {
             const waitMessage = config.invite.inviteWaitMessage
-                .replace('{groupName}', groupName)
-                .replace('{groupId}', rawGroupId)
-                .replace('{userName}', userName)
-                .replace('{userId}', rawUserId);
+                .replaceAll('{groupName}', groupName)
+                .replaceAll('{groupId}', rawGroupId)
+                .replaceAll('{userName}', userName)
+                .replaceAll('{userId}', rawUserId);
 
-            // 【关键修复】强制使用 sendPrivateMessage 确保发私聊
             await session.bot.sendPrivateMessage(rawUserId, waitMessage);
         } catch (error) {
             console.error(`发送等待审核提示给 ${rawUserId} 失败:`, error);
@@ -67,12 +87,7 @@ export function apply(ctx: Context, config: Config) {
         if (!config.invite.adminQQs || config.invite.adminQQs.length === 0) {
             if (config.invite.autoApprove) {
                 try {
-                    await session.bot.internal.setGroupAddRequest({
-                        flag: flag,
-                        sub_type: 'invite',
-                        approve: true,
-                        reason: '',
-                    });
+                    await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
                     if (config.invite.showDetailedLog) {
                         console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
                     }
@@ -83,25 +98,25 @@ export function apply(ctx: Context, config: Config) {
             return;
         }
 
-        // 存储邀请信息
-        const inviteId = `${rawGroupId}_${rawUserId}_${Date.now()}`;
-        pendingInvites.set(inviteId, {
+        // 存储邀请信息（以 groupId 为 key，方便管理员使用指令审核）
+        pendingInvites.set(rawGroupId, {
             groupId: rawGroupId,
             userId: rawUserId,
             userName: userName,
+            groupName: groupName,
             time: Date.now(),
             flag: flag
         });
 
         const requestMessage = config.invite.inviteRequestMessage
-            .replace('{groupName}', groupName)
-            .replace('{groupId}', rawGroupId)
-            .replace('{userName}', userName)
-            .replace('{userId}', rawUserId);
+            .replaceAll('{groupName}', groupName)
+            .replaceAll('{groupId}', rawGroupId)
+            .replaceAll('{userName}', userName)
+            .replaceAll('{userId}', rawUserId);
 
         let requestSent = false;
 
-        // 1. 发送到通知群 (使用 sendMessage)
+        // 1. 发送到通知群
         if (config.invite.notificationGroupId) {
             try {
                 await session.bot.sendMessage(config.invite.notificationGroupId, requestMessage);
@@ -114,14 +129,12 @@ export function apply(ctx: Context, config: Config) {
             }
         }
 
-        // 2. 发送私聊给管理员 (使用 sendPrivateMessage)
+        // 2. 发送私聊给管理员
         if (!config.invite.notificationGroupId) {
             for (const adminQQ of config.invite.adminQQs) {
                 try {
-                    // 【关键修复】强制使用 sendPrivateMessage
                     await session.bot.sendPrivateMessage(adminQQ, requestMessage);
                     requestSent = true;
-
                     if (config.invite.showDetailedLog) {
                         console.log(`发送邀请请求给管理员 ${adminQQ}`);
                     }
@@ -136,153 +149,99 @@ export function apply(ctx: Context, config: Config) {
         }
     });
 
-    // 监听消息以处理管理员审核回复
-    ctx.on('message', async (session) => {
-        const { userId, guildId } = session;
+    // ======== 注册审核指令 ========
 
-        if (!config.invite.adminQQs.includes(userId)) return;
+    // 同意邀请指令
+    ctx.command('approve <groupId:string>', '同意群聊邀请', { authority: 4 })
+        .action(async ({ session }, groupId) => {
+            if (!groupId) return '请指定群号。用法：approve <群号>';
 
-        const isNotificationGroup = config.invite.notificationGroupId && guildId === config.invite.notificationGroupId;
-        const isPrivate = !guildId;
+            // 验证是否为管理员
+            if (!config.invite.adminQQs.includes(session.userId)) {
+                return '权限不足，只有管理员可以审核邀请。';
+            }
 
-        if (!isNotificationGroup && !isPrivate && config.invite.notificationGroupId) return;
+            const inviteData = pendingInvites.get(groupId);
+            if (!inviteData) {
+                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${pendingInvites.size > 0
+                    ? Array.from(pendingInvites.values()).map(i => `${i.groupId}(${i.groupName})`).join(', ')
+                    : '无'
+                    }`;
+            }
 
-        // 检查是否有引用元素
-        const hasQuote = session.elements.some(element => element.type === 'quote');
-        if (!hasQuote) return;
+            try {
+                await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', true, '');
 
-        // 【修复】从 elements 中提取纯文本内容，过滤掉 quote 和 at 等非文本元素
-        const textContent = session.elements
-            .filter(element => element.type === 'text')
-            .map(element => element.attrs?.content || '')
-            .join('')
-            .trim();
-
-        if (config.invite.showDetailedLog) {
-            console.log(`管理员审核回复 - 原始content: "${session.content}", 提取文本: "${textContent}"`);
-        }
-
-        if (!['同意', '拒绝', 'accept', 'reject'].includes(textContent)) return;
-
-        const quoteElement = session.elements.find(element => element.type === 'quote');
-        if (!quoteElement) return;
-
-        // 【修复】多种方式获取被引用消息的内容
-        let quoteMessageContent = '';
-
-        // 方式1: 从 session.quote 获取
-        if (session.quote?.content) {
-            quoteMessageContent = session.quote.content;
-        }
-        // 方式2: 从 quoteElement 的属性获取
-        if (!quoteMessageContent) {
-            quoteMessageContent = quoteElement.attrs?.content || (quoteElement.attrs as any)?.text || '';
-        }
-        // 方式3: 从 quoteElement 的子元素获取文本
-        if (!quoteMessageContent && quoteElement.children?.length > 0) {
-            quoteMessageContent = quoteElement.children
-                .filter((child: any) => child.type === 'text')
-                .map((child: any) => child.attrs?.content || '')
-                .join('');
-        }
-        // 方式4: 通过消息 ID 获取原始消息
-        if (!quoteMessageContent) {
-            const quoteId = quoteElement.attrs?.id || session.quote?.id;
-            if (quoteId) {
+                // 通知邀请者
                 try {
-                    const channelId = guildId || session.channelId;
-                    if (channelId) {
-                        const originalMsg = await session.bot.getMessage(channelId, quoteId);
-                        if (originalMsg?.content) {
-                            quoteMessageContent = originalMsg.content;
-                        }
-                    }
+                    await session.bot.sendPrivateMessage(inviteData.userId, `您的群聊邀请已通过管理员审核，机器人已加入群聊。`);
                 } catch (error) {
-                    if (config.invite.showDetailedLog) {
-                        console.error('通过消息ID获取引用消息内容失败:', error);
-                    }
+                    console.error('通知邀请者失败:', error);
                 }
+
+                pendingInvites.delete(groupId);
+                return `已同意加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`;
+            } catch (error) {
+                console.error('处理同意邀请失败:', error);
+                return `处理同意邀请失败: ${error.message}`;
             }
-        }
+        });
 
-        if (config.invite.showDetailedLog) {
-            console.log(`引用消息内容: "${quoteMessageContent}"`);
-        }
+    // 拒绝邀请指令
+    ctx.command('reject <groupId:string>', '拒绝群聊邀请', { authority: 4 })
+        .action(async ({ session }, groupId) => {
+            if (!groupId) return '请指定群号。用法：reject <群号>';
 
-        const groupIdMatch = quoteMessageContent.match(/群号[：:]\s*(\d+)/i);
-        const userIdMatch = quoteMessageContent.match(/QQ[：:]\s*(\d+)/i);
-
-        if (groupIdMatch && userIdMatch) {
-            const extractedGroupId = groupIdMatch[1];
-            const extractedUserId = userIdMatch[1];
-
-            if (config.invite.showDetailedLog) {
-                console.log(`提取到群号: ${extractedGroupId}, QQ: ${extractedUserId}`);
+            // 验证是否为管理员
+            if (!config.invite.adminQQs.includes(session.userId)) {
+                return '权限不足，只有管理员可以审核邀请。';
             }
 
-            // 查找邀请
-            let targetInviteId = null;
-            for (const [inviteId, inviteData] of pendingInvites) {
-                if (inviteData.groupId === extractedGroupId && inviteData.userId === extractedUserId) {
-                    targetInviteId = inviteId;
-                    break;
+            const inviteData = pendingInvites.get(groupId);
+            if (!inviteData) {
+                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${pendingInvites.size > 0
+                    ? Array.from(pendingInvites.values()).map(i => `${i.groupId}(${i.groupName})`).join(', ')
+                    : '无'
+                    }`;
+            }
+
+            try {
+                await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', false, '已拒绝');
+
+                // 通知邀请者
+                try {
+                    await session.bot.sendPrivateMessage(inviteData.userId, `您的群聊邀请未通过管理员审核，机器人将不会加入该群聊。`);
+                } catch (error) {
+                    console.error('通知邀请者失败:', error);
                 }
+
+                pendingInvites.delete(groupId);
+                return `已拒绝加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`;
+            } catch (error) {
+                console.error('处理拒绝邀请失败:', error);
+                return `处理拒绝邀请失败: ${error.message}`;
+            }
+        });
+
+    // 查看待处理邀请指令
+    ctx.command('pending-invites', '查看待处理的群聊邀请', { authority: 4 })
+        .action(async ({ session }) => {
+            if (!config.invite.adminQQs.includes(session.userId)) {
+                return '权限不足，只有管理员可以查看待处理邀请。';
             }
 
-            if (targetInviteId) {
-                const inviteData = pendingInvites.get(targetInviteId);
-                if (inviteData) {
-                    if (textContent === '同意' || textContent === 'accept') {
-                        try {
-                            await session.bot.internal.setGroupAddRequest({
-                                flag: inviteData.flag,
-                                sub_type: 'invite',
-                                approve: true,
-                                reason: '',
-                            });
-
-                            await session.send(`已同意加入群 ${inviteData.groupId}`);
-
-                            // 通知邀请者 (使用 sendPrivateMessage)
-                            try {
-                                await session.bot.sendPrivateMessage(inviteData.userId, `您的群聊邀请已通过管理员审核，机器人已加入群聊。`);
-                            } catch (error) {
-                                console.error('通知邀请者失败:', error);
-                            }
-                        } catch (error) {
-                            console.error('处理同意邀请失败:', error);
-                            await session.send(`处理同意邀请失败: ${error.message}`);
-                        }
-                    } else { // 拒绝
-                        try {
-                            await session.bot.internal.setGroupAddRequest({
-                                flag: inviteData.flag,
-                                sub_type: 'invite',
-                                approve: false,
-                                reason: '已拒绝',
-                            });
-
-                            await session.send(`已拒绝加入群 ${inviteData.groupId}`);
-
-                            // 通知邀请者 (使用 sendPrivateMessage)
-                            try {
-                                await session.bot.sendPrivateMessage(inviteData.userId, `您的群聊邀请未通过管理员审核，机器人将不会加入该群聊。`);
-                            } catch (error) {
-                                console.error('通知邀请者失败:', error);
-                            }
-                        } catch (error) {
-                            console.error('处理拒绝邀请失败:', error);
-                            await session.send(`处理拒绝邀请失败: ${error.message}`);
-                        }
-                    }
-                    pendingInvites.delete(targetInviteId);
-                }
-            } else if (config.invite.showDetailedLog) {
-                console.log(`未找到匹配的待处理邀请: 群号=${extractedGroupId}, QQ=${extractedUserId}`);
-                console.log(`当前待处理邀请列表:`, Array.from(pendingInvites.entries()));
+            if (pendingInvites.size === 0) {
+                return '当前没有待处理的群聊邀请。';
             }
-        } else if (config.invite.showDetailedLog) {
-            console.log(`无法从引用消息中提取群号或QQ号，引用内容: "${quoteMessageContent}"`);
-        }
-    });
+
+            const lines = ['待处理的群聊邀请列表：'];
+            for (const [, invite] of pendingInvites) {
+                const elapsed = Math.floor((Date.now() - invite.time) / 1000 / 60);
+                lines.push(`- 群：${invite.groupName}（${invite.groupId}）`);
+                lines.push(`  邀请者：${invite.userName}（${invite.userId}）`);
+                lines.push(`  ${elapsed} 分钟前`);
+                lines.push(`  同意：approve ${invite.groupId} | 拒绝：reject ${invite.groupId}`);
+            }
+            return lines.join('\n');
+        });
 }
