@@ -1,5 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
+import { approvedGroups } from '../state'
 
 export const name = 'group-control-invite'
 
@@ -88,6 +89,8 @@ export function apply(ctx: Context, config: Config) {
             if (config.invite.autoApprove) {
                 try {
                     await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
+                    // 记录已审核通过
+                    approvedGroups.add(rawGroupId);
                     if (config.invite.showDetailedLog) {
                         console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
                     }
@@ -171,6 +174,9 @@ export function apply(ctx: Context, config: Config) {
 
             try {
                 await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', true, '');
+
+                // 记录已审核通过，防止小群自动退群
+                approvedGroups.add(groupId);
 
                 // 通知邀请者
                 try {

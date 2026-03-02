@@ -94,4 +94,5 @@ export const ADMIN_COMMANDS = new Set([
     'bot-on', 'bot-off', 'quit',
     'view-blacklist', 'remove-from-blacklist', 'add-to-blacklist', 'clear-blacklist',
     'approve', 'reject', 'pending-invites',
+    'allow-small-group', 'disallow-small-group', 'view-small-group-whitelist',
 ]);

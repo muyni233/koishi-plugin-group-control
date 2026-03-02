@@ -19,11 +19,16 @@ export interface GroupBotStatus {
     guildId: string;
     botEnabled: boolean;
 }
+export interface SmallGroupWhitelist {
+    platform: string;
+    guildId: string;
+}
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild;
         command_frequency_record: CommandFrequencyRecord;
         group_bot_status: GroupBotStatus;
+        small_group_whitelist: SmallGroupWhitelist;
     }
 }
 export declare const name = "group-control-database";
@@ -38,3 +43,7 @@ export declare function getCommandFrequencyRecord(ctx: Context, platform: string
 export declare function updateCommandFrequencyRecord(ctx: Context, platform: string, guildId: string, data: Partial<CommandFrequencyRecord>): Promise<void>;
 export declare function getGroupBotStatus(ctx: Context, platform: string, guildId: string): Promise<GroupBotStatus | null>;
 export declare function setGroupBotStatus(ctx: Context, platform: string, guildId: string, botEnabled: boolean): Promise<void>;
+export declare function isInSmallGroupWhitelist(ctx: Context, guildId: string): Promise<boolean>;
+export declare function addToSmallGroupWhitelist(ctx: Context, guildId: string): Promise<void>;
+export declare function removeFromSmallGroupWhitelist(ctx: Context, guildId: string): Promise<void>;
+export declare function getAllSmallGroupWhitelist(ctx: Context): Promise<SmallGroupWhitelist[]>;

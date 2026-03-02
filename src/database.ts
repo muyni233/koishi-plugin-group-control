@@ -23,12 +23,17 @@ export interface GroupBotStatus {
     botEnabled: boolean
 }
 
+export interface SmallGroupWhitelist {
+    platform: string
+    guildId: string
+}
 
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild
         command_frequency_record: CommandFrequencyRecord
         group_bot_status: GroupBotStatus
+        small_group_whitelist: SmallGroupWhitelist
     }
 }
 
@@ -56,6 +61,11 @@ export function apply(ctx: Context) {
         platform: 'string',
         guildId: 'string',
         botEnabled: 'boolean',
+    }, { primary: ['platform', 'guildId'] })
+
+    ctx.model.extend('small_group_whitelist', {
+        platform: 'string',
+        guildId: 'string',
     }, { primary: ['platform', 'guildId'] })
 }
 
@@ -106,4 +116,22 @@ export async function getGroupBotStatus(ctx: Context, platform: string, guildId:
 
 export async function setGroupBotStatus(ctx: Context, platform: string, guildId: string, botEnabled: boolean) {
     await ctx.model.upsert('group_bot_status', [{ platform, guildId, botEnabled }]);
+}
+
+// 小群白名单管理
+export async function isInSmallGroupWhitelist(ctx: Context, guildId: string): Promise<boolean> {
+    const records = await ctx.model.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
+    return records.length > 0;
+}
+
+export async function addToSmallGroupWhitelist(ctx: Context, guildId: string) {
+    await ctx.model.upsert('small_group_whitelist', [{ platform: BLACKLIST_PLATFORM, guildId }]);
+}
+
+export async function removeFromSmallGroupWhitelist(ctx: Context, guildId: string) {
+    await ctx.model.remove('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
+}
+
+export async function getAllSmallGroupWhitelist(ctx: Context) {
+    return await ctx.model.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM });
 }

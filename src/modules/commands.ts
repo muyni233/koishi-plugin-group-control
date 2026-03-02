@@ -2,13 +2,14 @@ import { Context } from 'koishi'
 import { Config } from '../config'
 import { isBlacklistEnabled, parseGuildId, formatDate } from '../utils'
 import {
-    getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild
+    getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
+    addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist
 } from '../database'
 
 export const name = 'group-control-commands'
 
 export function apply(ctx: Context, config: Config) {
-    // 命令部分
+    // 黑名单命令
     async function viewBlacklist() {
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
         const records = await getAllBlacklistedGuilds(ctx);
@@ -43,4 +44,33 @@ export function apply(ctx: Context, config: Config) {
         return `已清空黑名单，共移除 ${records.length} 个群聊。`;
     }
     ctx.command('clear-blacklist', '清空黑名单', { authority: 4 }).action(clearBlacklist);
+
+    // 小群白名单命令
+    ctx.command('allow-small-group <groupId:text>', '解除指定群聊的小群人数限制', { authority: 4 })
+        .action(async ({ }, input: string) => {
+            const guildId = parseGuildId(input);
+            if (!guildId) return '输入格式错误，请输入群号。';
+            const exists = await isInSmallGroupWhitelist(ctx, guildId);
+            if (exists) return `群聊 ${guildId} 已在小群白名单中。`;
+            await addToSmallGroupWhitelist(ctx, guildId);
+            return `已将群聊 ${guildId} 加入小群白名单，该群不再受小群人数限制。`;
+        });
+
+    ctx.command('disallow-small-group <groupId:text>', '恢复指定群聊的小群人数限制', { authority: 4 })
+        .action(async ({ }, input: string) => {
+            const guildId = parseGuildId(input);
+            if (!guildId) return '输入格式错误，请输入群号。';
+            const exists = await isInSmallGroupWhitelist(ctx, guildId);
+            if (!exists) return `群聊 ${guildId} 不在小群白名单中。`;
+            await removeFromSmallGroupWhitelist(ctx, guildId);
+            return `已将群聊 ${guildId} 从小群白名单移除，该群将恢复小群人数限制。`;
+        });
+
+    ctx.command('view-small-group-whitelist', '查看小群白名单', { authority: 4 })
+        .action(async () => {
+            const records = await getAllSmallGroupWhitelist(ctx);
+            if (records.length === 0) return '小群白名单为空。';
+            return '小群白名单列表（以下群不受小群人数限制）：\n' + records.map(r => `- ${r.guildId}`).join('\n');
+        });
 }
+
