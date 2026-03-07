@@ -21,6 +21,7 @@ export interface GroupInviteConfig {
     inviteRequestMessage: string;
     autoApprove: boolean;
     showDetailedLog: boolean;
+    inviteExpireDays: number;
 }
 export interface FrequencyConfig {
     enabled: boolean;

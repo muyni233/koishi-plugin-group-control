@@ -28,12 +28,23 @@ export interface SmallGroupWhitelist {
     guildId: string
 }
 
+export interface PendingInvite {
+    platform: string
+    groupId: string
+    userId: string
+    userName: string
+    groupName: string
+    time: number
+    flag: string
+}
+
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild
         command_frequency_record: CommandFrequencyRecord
         group_bot_status: GroupBotStatus
         small_group_whitelist: SmallGroupWhitelist
+        pending_invite: PendingInvite
     }
 }
 
@@ -67,6 +78,16 @@ export function apply(ctx: Context) {
         platform: 'string',
         guildId: 'string',
     }, { primary: ['platform', 'guildId'] })
+
+    ctx.model.extend('pending_invite', {
+        platform: 'string',
+        groupId: 'string',
+        userId: 'string',
+        userName: 'string',
+        groupName: 'string',
+        time: 'integer',
+        flag: 'string',
+    }, { primary: ['platform', 'groupId'] })
 }
 
 export const BLACKLIST_PLATFORM = 'onebot';
@@ -134,4 +155,34 @@ export async function removeFromSmallGroupWhitelist(ctx: Context, guildId: strin
 
 export async function getAllSmallGroupWhitelist(ctx: Context) {
     return await ctx.model.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM });
+}
+
+// 待处理邀请管理
+export async function getPendingInvite(ctx: Context, groupId: string) {
+    const records = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
+    return records.length > 0 ? records[0] : null;
+}
+
+export async function addPendingInvite(ctx: Context, inviteUser: Omit<PendingInvite, 'platform'>) {
+    await ctx.model.upsert('pending_invite', [{ platform: BLACKLIST_PLATFORM, ...inviteUser }]);
+}
+
+export async function removePendingInvite(ctx: Context, groupId: string) {
+    await ctx.model.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
+}
+
+export async function getAllPendingInvites(ctx: Context) {
+    return await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
+}
+
+export async function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number) {
+    const cutoff = Date.now() - expireTimeMs;
+    // 使用 query builder 直接删除过期记录虽然好，但是 Koishi 的简单写法可以通过获取然后分批删除，
+    // 为了兼容多数据库，我们取出所有后过滤再删，或者使用更简单的写法
+    const all = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
+    const expired = all.filter(r => r.time < cutoff);
+    for (const record of expired) {
+        await ctx.model.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId: record.groupId });
+    }
+    return expired.length;
 }

@@ -1,35 +1,28 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
 import { approvedGroups } from '../state'
+import {
+    getPendingInvite, addPendingInvite, removePendingInvite,
+    getAllPendingInvites, clearExpiredPendingInvites
+} from '../database'
 
 export const name = 'group-control-invite'
 
 export function apply(ctx: Context, config: Config) {
     if (!config.invite.enabled) return;
 
-    // 存储待处理的邀请，key 为 groupId
-    const pendingInvites = new Map<string, {
-        groupId: string
-        userId: string
-        userName: string
-        groupName: string
-        time: number
-        flag: string
-    }>();
-
-    // 定期清理超时的邀请（10分钟超时）
-    const INVITE_TIMEOUT = 10 * 60 * 1000;
-    setInterval(() => {
-        const now = Date.now();
-        for (const [key, invite] of pendingInvites) {
-            if (now - invite.time > INVITE_TIMEOUT) {
-                pendingInvites.delete(key);
-                if (config.invite.showDetailedLog) {
-                    console.log(`邀请超时已清理: 群号=${invite.groupId}, 邀请者=${invite.userId}`);
-                }
+    // 定期清理超时的邀请（比如每天一次，或者按需，这里每小时检查一次）
+    setInterval(async () => {
+        const expireMs = config.invite.inviteExpireDays * 24 * 60 * 60 * 1000;
+        try {
+            const count = await clearExpiredPendingInvites(ctx, expireMs);
+            if (count > 0 && config.invite.showDetailedLog) {
+                console.log(`已自动清理 ${count} 个过期邀请`);
             }
+        } catch (error) {
+            console.error('清理过期邀请失败:', error);
         }
-    }, 60 * 1000);
+    }, 60 * 60 * 1000);
 
     // 监听群聊邀请事件
     ctx.on('guild-request', async (session) => {
@@ -101,8 +94,8 @@ export function apply(ctx: Context, config: Config) {
             return;
         }
 
-        // 存储邀请信息（以 groupId 为 key，方便管理员使用指令审核）
-        pendingInvites.set(rawGroupId, {
+        // 存储邀请信息到数据库
+        await addPendingInvite(ctx, {
             groupId: rawGroupId,
             userId: rawUserId,
             userName: userName,
@@ -155,7 +148,7 @@ export function apply(ctx: Context, config: Config) {
     // ======== 注册审核指令 ========
 
     // 同意邀请指令
-    ctx.command('approve <groupId:string>', '同意群聊邀请', { authority: 4 })
+    ctx.command('approve <groupId:string>', '同意群聊邀请')
         .action(async ({ session }, groupId) => {
             if (!groupId) return '请指定群号。用法：approve <群号>';
 
@@ -164,10 +157,11 @@ export function apply(ctx: Context, config: Config) {
                 return '权限不足，只有管理员可以审核邀请。';
             }
 
-            const inviteData = pendingInvites.get(groupId);
+            const inviteData = await getPendingInvite(ctx, groupId);
             if (!inviteData) {
-                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${pendingInvites.size > 0
-                    ? Array.from(pendingInvites.values()).map(i => `${i.groupId}(${i.groupName})`).join(', ')
+                const allInvites = await getAllPendingInvites(ctx);
+                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${allInvites.length > 0
+                    ? allInvites.map(i => `${i.groupId}(${i.groupName})`).join(', ')
                     : '无'
                     }`;
             }
@@ -185,7 +179,7 @@ export function apply(ctx: Context, config: Config) {
                     console.error('通知邀请者失败:', error);
                 }
 
-                pendingInvites.delete(groupId);
+                await removePendingInvite(ctx, groupId);
                 return `已同意加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`;
             } catch (error) {
                 console.error('处理同意邀请失败:', error);
@@ -194,7 +188,7 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 拒绝邀请指令
-    ctx.command('reject <groupId:string>', '拒绝群聊邀请', { authority: 4 })
+    ctx.command('reject <groupId:string>', '拒绝群聊邀请')
         .action(async ({ session }, groupId) => {
             if (!groupId) return '请指定群号。用法：reject <群号>';
 
@@ -203,10 +197,11 @@ export function apply(ctx: Context, config: Config) {
                 return '权限不足，只有管理员可以审核邀请。';
             }
 
-            const inviteData = pendingInvites.get(groupId);
+            const inviteData = await getPendingInvite(ctx, groupId);
             if (!inviteData) {
-                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${pendingInvites.size > 0
-                    ? Array.from(pendingInvites.values()).map(i => `${i.groupId}(${i.groupName})`).join(', ')
+                const allInvites = await getAllPendingInvites(ctx);
+                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${allInvites.length > 0
+                    ? allInvites.map(i => `${i.groupId}(${i.groupName})`).join(', ')
                     : '无'
                     }`;
             }
@@ -221,7 +216,7 @@ export function apply(ctx: Context, config: Config) {
                     console.error('通知邀请者失败:', error);
                 }
 
-                pendingInvites.delete(groupId);
+                await removePendingInvite(ctx, groupId);
                 return `已拒绝加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`;
             } catch (error) {
                 console.error('处理拒绝邀请失败:', error);
@@ -230,18 +225,19 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 查看待处理邀请指令
-    ctx.command('pending-invites', '查看待处理的群聊邀请', { authority: 4 })
+    ctx.command('pending', '查看待处理的群聊邀请')
         .action(async ({ session }) => {
             if (!config.invite.adminQQs.includes(session.userId)) {
                 return '权限不足，只有管理员可以查看待处理邀请。';
             }
 
-            if (pendingInvites.size === 0) {
+            const allInvites = await getAllPendingInvites(ctx);
+            if (allInvites.length === 0) {
                 return '当前没有待处理的群聊邀请。';
             }
 
             const lines = ['待处理的群聊邀请列表：'];
-            for (const [, invite] of pendingInvites) {
+            for (const invite of allInvites) {
                 const elapsed = Math.floor((Date.now() - invite.time) / 1000 / 60);
                 lines.push(`- 群：${invite.groupName}（${invite.groupId}）`);
                 lines.push(`  邀请者：${invite.userName}（${invite.userId}）`);

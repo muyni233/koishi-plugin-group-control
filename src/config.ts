@@ -23,6 +23,7 @@ export interface GroupInviteConfig {
     inviteRequestMessage: string
     autoApprove: boolean
     showDetailedLog: boolean
+    inviteExpireDays: number
 }
 
 export interface FrequencyConfig {
@@ -108,6 +109,7 @@ export const Config: Schema<Config> = Schema.intersect([
             inviteRequestMessage: Schema.string().default('收到新的群聊邀请请求：\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})\n\n请管理员使用指令 approve {groupId} 同意或 reject {groupId} 拒绝。').description('发送给管理员的邀请请求消息模板，支持变量{groupName}, {groupId}, {userName}, {userId}'),
             autoApprove: Schema.boolean().default(false).description('是否自动同意邀请（仅在没有指定管理员时）'),
             showDetailedLog: Schema.boolean().default(false).description('是否显示详细日志'),
+            inviteExpireDays: Schema.number().default(3).description('邀请记录过期时间（天），超过此时间未处理的邀请将被自动清理'),
         }).description('群聊邀请审核'),
     }),
     Schema.object({

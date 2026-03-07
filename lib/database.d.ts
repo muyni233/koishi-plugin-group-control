@@ -23,12 +23,22 @@ export interface SmallGroupWhitelist {
     platform: string;
     guildId: string;
 }
+export interface PendingInvite {
+    platform: string;
+    groupId: string;
+    userId: string;
+    userName: string;
+    groupName: string;
+    time: number;
+    flag: string;
+}
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild;
         command_frequency_record: CommandFrequencyRecord;
         group_bot_status: GroupBotStatus;
         small_group_whitelist: SmallGroupWhitelist;
+        pending_invite: PendingInvite;
     }
 }
 export declare const name = "group-control-database";
@@ -47,3 +57,8 @@ export declare function isInSmallGroupWhitelist(ctx: Context, guildId: string): 
 export declare function addToSmallGroupWhitelist(ctx: Context, guildId: string): Promise<void>;
 export declare function removeFromSmallGroupWhitelist(ctx: Context, guildId: string): Promise<void>;
 export declare function getAllSmallGroupWhitelist(ctx: Context): Promise<SmallGroupWhitelist[]>;
+export declare function getPendingInvite(ctx: Context, groupId: string): Promise<PendingInvite>;
+export declare function addPendingInvite(ctx: Context, inviteUser: Omit<PendingInvite, 'platform'>): Promise<void>;
+export declare function removePendingInvite(ctx: Context, groupId: string): Promise<void>;
+export declare function getAllPendingInvites(ctx: Context): Promise<PendingInvite[]>;
+export declare function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number): Promise<number>;

@@ -41,6 +41,11 @@ export async function notifyAdmins(bot: any, config: Config, message: string) {
  * - builtin 模式: 检查用户是否为群管理员/群主，或在管理员QQ列表中
  */
 export async function hasPermission(session: Session, config: Config): Promise<boolean> {
+    // 填写在里面的管理员有全局管理权限，无视群管理员要求
+    if (config.invite.adminQQs?.includes(session.userId)) {
+        return true;
+    }
+
     if (config.permission.mode === 'koishi') {
         // Koishi 权限模式：通过 authority 判断（指令的 authority 配置自动处理，这里返回 true）
         // 如果使用此函数做额外检查，检查 user.authority
@@ -53,13 +58,8 @@ export async function hasPermission(session: Session, config: Config): Promise<b
         return false;
     }
 
-    // 内置权限模式：检查群管理员/群主 + 管理员QQ列表
+    // 内置权限模式：检查群管理员/群主
     const userId = session.userId;
-
-    // 检查是否在管理员QQ列表中
-    if (config.invite.adminQQs?.includes(userId)) {
-        return true;
-    }
 
     // 检查是否为群管理员或群主
     try {
@@ -89,10 +89,25 @@ export async function hasPermission(session: Session, config: Config): Promise<b
     return false;
 }
 
+/**
+ * 检查当前用户是否拥有全局管理权限
+ * （供独立于群聊的全局指令（如黑名单、白名单）使用）
+ */
+export function isGlobalAdmin(session: Session, config: Config): boolean {
+    if (config.invite.adminQQs?.includes(session.userId)) {
+        return true;
+    }
+    const user = session.user as any;
+    if (config.permission.mode === 'koishi' && user && typeof user.authority === 'number') {
+        return user.authority >= 4; // Koishi模式下保留高级管理员(4级)能力
+    }
+    return false;
+}
+
 /** 管理指令列表 - 这些指令始终不受 bot-off 影响 */
 export const ADMIN_COMMANDS = new Set([
     'bot-on', 'bot-off', 'quit',
-    'view-blacklist', 'remove-from-blacklist', 'add-to-blacklist', 'clear-blacklist',
-    'approve', 'reject', 'pending-invites',
-    'allow-small-group', 'disallow-small-group', 'view-small-group-whitelist',
+    'banlist', 'unban', 'ban', 'clearban',
+    'approve', 'reject', 'pending',
+    'sg-add', 'sg-rm', 'sg-list',
 ]);
