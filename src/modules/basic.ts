@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasPermission } from '../utils'
+import { notifyAdmins, hasGuildPermission } from '../utils'
 import { approvedGroups } from '../state'
 import { isInSmallGroupWhitelist } from '../database'
 
@@ -125,6 +125,16 @@ export function apply(ctx: Context, config: Config) {
                                 console.error(`小群自动退群失败 (群号: ${guildId}):`, e);
                                 quittingGuilds.delete(`${platform}:${guildId}`);
                             }
+                        } else if (memberCount > config.basic.smallGroupThreshold) {
+                            // 人数达标但未经审核，通知管理员
+                            if (config.basic.smallGroupQualifiedNotifyAdmin) {
+                                const qualifiedMsg = config.basic.smallGroupQualifiedMessage
+                                    .replaceAll('{groupName}', groupName)
+                                    .replaceAll('{groupId}', guildId)
+                                    .replaceAll('{memberCount}', memberCount.toString())
+                                    .replaceAll('{threshold}', config.basic.smallGroupThreshold.toString());
+                                await notifyAdmins(session.bot, config, qualifiedMsg);
+                            }
                         }
                     } catch (error) {
                         console.error(`小群自动退群检测失败 (群号: ${guildId}):`, error);
@@ -177,6 +187,28 @@ export function apply(ctx: Context, config: Config) {
         }
     });
 
+    // 被禁言通知
+    if (config.basic.notifyAdminOnMute) {
+        ctx.on('guild-member-mute' as any, async (session: any) => {
+            // 只关心 bot 自己被禁言
+            if (session.userId !== session.bot?.userId) return
+            // duration 为 0 表示解除禁言，不通知
+            if (!session.duration) return
+
+            const { guildId, platform } = session
+            const operatorId = session.operatorId || '未知'
+            const duration = session.duration ?? 0
+            const groupName = await getGroupName(session.bot, guildId)
+
+            const msg = config.basic.muteNotificationMessage
+                .replaceAll('{groupId}', guildId)
+                .replaceAll('{groupName}', groupName)
+                .replaceAll('{operatorId}', operatorId)
+                .replaceAll('{duration}', duration.toString())
+            await notifyAdmins(session.bot, config, msg)
+        })
+    }
+
     if (config.basic.quitCommandEnabled) {
         const cmdOpts: any = {};
         // Koishi模式下使用 authority 限权
@@ -190,7 +222,7 @@ export function apply(ctx: Context, config: Config) {
 
                 // 内置权限检查
                 if (config.permission.mode === 'builtin') {
-                    const hasPerm = await hasPermission(session, config);
+                    const hasPerm = await hasGuildPermission(session, config);
                     if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
                 }
 

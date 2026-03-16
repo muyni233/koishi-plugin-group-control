@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { isBlacklistEnabled, parseGuildId, formatDate, isGlobalAdmin } from '../utils'
+import { isBlacklistEnabled, parseGuildId, formatDate, hasGlobalPermission } from '../utils'
 import {
     getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
     addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist
@@ -11,7 +11,7 @@ export const name = 'group-control-commands'
 export function apply(ctx: Context, config: Config) {
     // 黑名单命令
     async function viewBlacklist({ session }) {
-        if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+        if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
         const records = await getAllBlacklistedGuilds(ctx);
         if (records.length === 0) return '黑名单为空。';
@@ -21,7 +21,7 @@ export function apply(ctx: Context, config: Config) {
         .action(viewBlacklist);
 
     async function removeFromBlacklist({ session }, input: string) {
-        if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+        if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
         const guildId = parseGuildId(input); if (!guildId) return `输入格式错误。`;
         const removed = await removeBlacklistedGuild(ctx, guildId);
@@ -31,7 +31,7 @@ export function apply(ctx: Context, config: Config) {
         .action(removeFromBlacklist);
 
     async function addToBlacklist({ session }, input: string) {
-        if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+        if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
         const guildId = parseGuildId(input); if (!guildId) return `输入格式错误。`;
         const existing = await getBlacklistedGuild(ctx, guildId);
@@ -43,7 +43,7 @@ export function apply(ctx: Context, config: Config) {
         .action(addToBlacklist);
 
     async function clearBlacklist({ session }) {
-        if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+        if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
         const records = await getAllBlacklistedGuilds(ctx);
         if (records.length === 0) return '黑名单已是空的。';
@@ -56,7 +56,7 @@ export function apply(ctx: Context, config: Config) {
     // 小群白名单命令
     ctx.command('sg-add <groupId:text>', '解除指定群聊的小群人数限制')
         .action(async ({ session }, input: string) => {
-            if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+            if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const guildId = parseGuildId(input);
             if (!guildId) return '输入格式错误，请输入群号。';
             const exists = await isInSmallGroupWhitelist(ctx, guildId);
@@ -67,7 +67,7 @@ export function apply(ctx: Context, config: Config) {
 
     ctx.command('sg-rm <groupId:text>', '恢复指定群聊的小群人数限制')
         .action(async ({ session }, input: string) => {
-            if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+            if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const guildId = parseGuildId(input);
             if (!guildId) return '输入格式错误，请输入群号。';
             const exists = await isInSmallGroupWhitelist(ctx, guildId);
@@ -78,7 +78,7 @@ export function apply(ctx: Context, config: Config) {
 
     ctx.command('sg-list', '查看小群白名单')
         .action(async ({ session }) => {
-            if (!isGlobalAdmin(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
+            if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const records = await getAllSmallGroupWhitelist(ctx);
             if (records.length === 0) return '小群白名单为空。';
             return '小群白名单列表（以下群不受小群人数限制）：\n' + records.map(r => `- ${r.guildId}`).join('\n');

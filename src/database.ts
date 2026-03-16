@@ -15,6 +15,8 @@ export interface CommandFrequencyRecord {
     warningSent: boolean
     blockExpiryTime: number
     firstWarningTime: number
+    blockCount: number
+    lastBlockNotifyTime: number
 }
 
 export interface GroupBotStatus {
@@ -38,6 +40,15 @@ export interface PendingInvite {
     flag: string
 }
 
+export interface PendingFriendRequest {
+    platform: string
+    userId: string
+    nickname: string
+    comment: string
+    flag: string
+    time: number
+}
+
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild
@@ -45,6 +56,7 @@ declare module 'koishi' {
         group_bot_status: GroupBotStatus
         small_group_whitelist: SmallGroupWhitelist
         pending_invite: PendingInvite
+        pending_friend_request: PendingFriendRequest
     }
 }
 
@@ -66,6 +78,8 @@ export function apply(ctx: Context) {
         warningSent: 'boolean',
         blockExpiryTime: 'integer',
         firstWarningTime: 'integer',
+        blockCount: 'integer',
+        lastBlockNotifyTime: 'integer',
     }, { primary: ['platform', 'guildId'] })
 
     ctx.model.extend('group_bot_status', {
@@ -88,6 +102,15 @@ export function apply(ctx: Context) {
         time: 'integer',
         flag: 'string',
     }, { primary: ['platform', 'groupId'] })
+
+    ctx.model.extend('pending_friend_request', {
+        platform: 'string',
+        userId: 'string',
+        nickname: 'string',
+        comment: 'string',
+        flag: 'string',
+        time: 'integer',
+    }, { primary: ['platform', 'userId'] })
 }
 
 export const BLACKLIST_PLATFORM = 'onebot';
@@ -177,12 +200,38 @@ export async function getAllPendingInvites(ctx: Context) {
 
 export async function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number) {
     const cutoff = Date.now() - expireTimeMs;
-    // 使用 query builder 直接删除过期记录虽然好，但是 Koishi 的简单写法可以通过获取然后分批删除，
-    // 为了兼容多数据库，我们取出所有后过滤再删，或者使用更简单的写法
     const all = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
     const expired = all.filter(r => r.time < cutoff);
     for (const record of expired) {
         await ctx.model.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId: record.groupId });
+    }
+    return expired.length;
+}
+
+// 待处理好友申请管理
+export async function getPendingFriendRequest(ctx: Context, platform: string, userId: string) {
+    const records = await ctx.model.get('pending_friend_request', { platform, userId });
+    return records.length > 0 ? records[0] : null;
+}
+
+export async function addPendingFriendRequest(ctx: Context, platform: string, data: Omit<PendingFriendRequest, 'platform'>) {
+    await ctx.model.upsert('pending_friend_request', [{ platform, ...data }]);
+}
+
+export async function removePendingFriendRequest(ctx: Context, platform: string, userId: string) {
+    await ctx.model.remove('pending_friend_request', { platform, userId });
+}
+
+export async function getAllPendingFriendRequests(ctx: Context, platform: string) {
+    return await ctx.model.get('pending_friend_request', { platform });
+}
+
+export async function clearExpiredPendingFriendRequests(ctx: Context, platform: string, expireTimeMs: number) {
+    const cutoff = Date.now() - expireTimeMs;
+    const all = await ctx.model.get('pending_friend_request', { platform });
+    const expired = all.filter(r => r.time < cutoff);
+    for (const record of expired) {
+        await ctx.model.remove('pending_friend_request', { platform, userId: record.userId });
     }
     return expired.length;
 }

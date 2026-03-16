@@ -13,6 +13,8 @@ export interface CommandFrequencyRecord {
     warningSent: boolean;
     blockExpiryTime: number;
     firstWarningTime: number;
+    blockCount: number;
+    lastBlockNotifyTime: number;
 }
 export interface GroupBotStatus {
     platform: string;
@@ -32,6 +34,14 @@ export interface PendingInvite {
     time: number;
     flag: string;
 }
+export interface PendingFriendRequest {
+    platform: string;
+    userId: string;
+    nickname: string;
+    comment: string;
+    flag: string;
+    time: number;
+}
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild;
@@ -39,6 +49,7 @@ declare module 'koishi' {
         group_bot_status: GroupBotStatus;
         small_group_whitelist: SmallGroupWhitelist;
         pending_invite: PendingInvite;
+        pending_friend_request: PendingFriendRequest;
     }
 }
 export declare const name = "group-control-database";
@@ -62,3 +73,8 @@ export declare function addPendingInvite(ctx: Context, inviteUser: Omit<PendingI
 export declare function removePendingInvite(ctx: Context, groupId: string): Promise<void>;
 export declare function getAllPendingInvites(ctx: Context): Promise<PendingInvite[]>;
 export declare function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number): Promise<number>;
+export declare function getPendingFriendRequest(ctx: Context, platform: string, userId: string): Promise<PendingFriendRequest>;
+export declare function addPendingFriendRequest(ctx: Context, platform: string, data: Omit<PendingFriendRequest, 'platform'>): Promise<void>;
+export declare function removePendingFriendRequest(ctx: Context, platform: string, userId: string): Promise<void>;
+export declare function getAllPendingFriendRequests(ctx: Context, platform: string): Promise<PendingFriendRequest[]>;
+export declare function clearExpiredPendingFriendRequests(ctx: Context, platform: string, expireTimeMs: number): Promise<number>;

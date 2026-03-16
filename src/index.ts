@@ -6,6 +6,7 @@ import * as invite from './modules/invite'
 import * as frequency from './modules/frequency'
 import * as commands from './modules/commands'
 import * as botSwitch from './modules/switch'
+import * as friend from './modules/friend'
 
 export * from './config'
 
@@ -18,4 +19,5 @@ export function apply(ctx: Context, config: Config) {
   ctx.plugin(frequency, config)
   ctx.plugin(commands, config)
   ctx.plugin(botSwitch, config)
+  ctx.plugin(friend, config)
 }

@@ -35,73 +35,52 @@ export async function notifyAdmins(bot: any, config: Config, message: string) {
     }
 }
 
-/**
- * 检查用户是否有管理权限
- * - koishi 模式: 使用 Koishi 自带的 authority 系统
- * - builtin 模式: 检查用户是否为群管理员/群主，或在管理员QQ列表中
- */
-export async function hasPermission(session: Session, config: Config): Promise<boolean> {
-    // 填写在里面的管理员有全局管理权限，无视群管理员要求
-    if (config.invite.adminQQs?.includes(session.userId)) {
-        return true;
-    }
-
+/** 是否为全局管理员（填在 adminQQs 里的） */
+export function isGlobalAdmin(session: Session, config: Config): boolean {
     if (config.permission.mode === 'koishi') {
-        // Koishi 权限模式：通过 authority 判断（指令的 authority 配置自动处理，这里返回 true）
-        // 如果使用此函数做额外检查，检查 user.authority
-        try {
-            const user = session.user as any;
-            if (user && typeof user.authority === 'number') {
-                return user.authority >= config.permission.koishiAuthority;
-            }
-        } catch { }
-        return false;
+        const user = session.user as any;
+        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority;
     }
+    return config.invite.adminQQs?.includes(session.userId) ?? false;
+}
 
-    // 内置权限模式：检查群管理员/群主
-    const userId = session.userId;
-
-    // 检查是否为群管理员或群主
+/** 是否为群管理员或群主（仅 builtin 模式使用） */
+async function isGuildAdmin(session: Session): Promise<boolean> {
     try {
-        const member = await session.bot.getGuildMember(session.guildId, userId);
-        const roles = (member as any)?.roles || (member as any)?.role;
-        if (roles) {
-            if (Array.isArray(roles)) {
-                return roles.some((r: string) => r === 'admin' || r === 'owner');
-            }
-            return roles === 'admin' || roles === 'owner' || roles === 'administrator';
-        }
-        // OneBot 的 role 字段
+        const member = await session.bot.getGuildMember(session.guildId, session.userId);
         const role = (member as any)?.role;
         if (role === 'admin' || role === 'owner') return true;
-    } catch (error) {
-        // 获取成员信息失败时，尝试用 OneBot 内部 API
+        const roles = (member as any)?.roles;
+        if (Array.isArray(roles)) return roles.some((r: string) => r === 'admin' || r === 'owner');
+    } catch {
         try {
             const info = await (session.bot as any).internal?.getGroupMemberInfo?.(
-                parseInt(session.guildId), parseInt(userId)
+                parseInt(session.guildId), parseInt(session.userId)
             );
-            if (info) {
-                return info.role === 'admin' || info.role === 'owner';
-            }
+            if (info?.role === 'admin' || info?.role === 'owner') return true;
         } catch { }
     }
-
     return false;
 }
 
 /**
- * 检查当前用户是否拥有全局管理权限
- * （供独立于群聊的全局指令（如黑名单、白名单）使用）
+ * 检查群级权限（bot-on/off、quit、protectedCommands）
+ * builtin 模式：群管理员或全局管理员均可
+ * koishi 模式：由 authority 决定
  */
-export function isGlobalAdmin(session: Session, config: Config): boolean {
-    if (config.invite.adminQQs?.includes(session.userId)) {
-        return true;
+export async function hasGuildPermission(session: Session, config: Config): Promise<boolean> {
+    if (config.permission.mode === 'koishi') {
+        const user = session.user as any;
+        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority;
     }
-    const user = session.user as any;
-    if (config.permission.mode === 'koishi' && user && typeof user.authority === 'number') {
-        return user.authority >= 4; // Koishi模式下保留高级管理员(4级)能力
-    }
-    return false;
+    if (isGlobalAdmin(session, config)) return true;
+    return await isGuildAdmin(session);
+}
+
+// 检查全局管理权限（ban/sg-add/approve/reject/pending/friend-approve 等）
+// builtin 模式：仅全局管理员（adminQQs）；koishi 模式：由 authority 决定
+export function hasGlobalPermission(session: Session, config: Config): boolean {
+    return isGlobalAdmin(session, config);
 }
 
 /** 管理指令列表 - 这些指令始终不受 bot-off 影响 */
@@ -110,4 +89,5 @@ export const ADMIN_COMMANDS = new Set([
     'banlist', 'unban', 'ban', 'clearban',
     'approve', 'reject', 'pending',
     'sg-add', 'sg-rm', 'sg-list',
+    'friend-pending', 'friend-approve', 'friend-reject',
 ]);

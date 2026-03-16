@@ -1,7 +1,7 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
 import { getGroupBotStatus, setGroupBotStatus } from '../database'
-import { hasPermission, ADMIN_COMMANDS } from '../utils'
+import { hasGuildPermission, ADMIN_COMMANDS } from '../utils'
 
 export const name = 'group-control-switch'
 
@@ -18,7 +18,7 @@ export function apply(ctx: Context, config: Config) {
             const commandName = argv.command.name;
             if (!protectedSet.has(commandName)) return; // 不在保护列表中
 
-            const hasPerm = await hasPermission(session, config);
+            const hasPerm = await hasGuildPermission(session, config);
             if (!hasPerm) {
                 return '权限不足，只有群管理员可以使用此指令。';
             }
@@ -39,7 +39,7 @@ export function apply(ctx: Context, config: Config) {
             if (!session.guildId) return '该指令只能在群聊中使用。';
 
             if (config.permission.mode === 'builtin') {
-                const hasPerm = await hasPermission(session, config);
+                const hasPerm = await hasGuildPermission(session, config);
                 if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
             }
 
@@ -53,7 +53,7 @@ export function apply(ctx: Context, config: Config) {
             if (!session.guildId) return '该指令只能在群聊中使用。';
 
             if (config.permission.mode === 'builtin') {
-                const hasPerm = await hasPermission(session, config);
+                const hasPerm = await hasGuildPermission(session, config);
                 if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
             }
 

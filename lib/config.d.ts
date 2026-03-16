@@ -1,10 +1,10 @@
 import { Schema } from 'koishi';
 export interface GroupConfig {
     welcomeMessage: string;
-    blacklistMessage: string;
     quitMessage: string;
-    enableBlacklist: boolean;
     quitCommandEnabled: boolean;
+    enableBlacklist: boolean;
+    blacklistMessage: string;
     notifyAdminOnKick: boolean;
     kickNotificationMessage: string;
     smallGroupAutoQuit: boolean;
@@ -12,6 +12,10 @@ export interface GroupConfig {
     smallGroupQuitMessage: string;
     smallGroupNotifyAdmin: boolean;
     smallGroupCheckDelay: number;
+    smallGroupQualifiedNotifyAdmin: boolean;
+    smallGroupQualifiedMessage: string;
+    notifyAdminOnMute: boolean;
+    muteNotificationMessage: string;
 }
 export interface GroupInviteConfig {
     enabled: boolean;
@@ -29,10 +33,27 @@ export interface FrequencyConfig {
     window: number;
     warnDelay: number;
     blockDur: number;
+    whitelist: string[];
+    privateEnabled: boolean;
+    privateLimit: number;
+    privateWindow: number;
+    privateWarnDelay: number;
+    privateBlockDur: number;
+    privateWhitelist: string[];
+    blockExpBase: number;
+    blockExpWindow: number;
+    blockNotifyCooldown: number;
     warnMsg: string;
     blockMsg: string;
     blockedMsg: string;
-    whitelist: string[];
+}
+export interface FriendConfig {
+    enabled: boolean;
+    autoApprove: boolean;
+    notifyAdminOnApprove: boolean;
+    requestExpireDays: number;
+    requestMessage: string;
+    approveNotificationMessage: string;
 }
 export interface BotSwitchConfig {
     enabled: boolean;
@@ -45,10 +66,11 @@ export interface PermissionConfig {
     protectedCommands: string[];
 }
 export interface Config {
-    basic: GroupConfig;
-    frequency: FrequencyConfig;
-    invite: GroupInviteConfig;
-    botSwitch: BotSwitchConfig;
     permission: PermissionConfig;
+    basic: GroupConfig;
+    invite: GroupInviteConfig;
+    friend: FriendConfig;
+    frequency: FrequencyConfig;
+    botSwitch: BotSwitchConfig;
 }
 export declare const Config: Schema<Config>;

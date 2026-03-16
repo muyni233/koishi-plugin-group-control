@@ -1,6 +1,7 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
 import { approvedGroups } from '../state'
+import { hasGlobalPermission } from '../utils'
 import {
     getPendingInvite, addPendingInvite, removePendingInvite,
     getAllPendingInvites, clearExpiredPendingInvites
@@ -153,9 +154,7 @@ export function apply(ctx: Context, config: Config) {
             if (!groupId) return '请指定群号。用法：approve <群号>';
 
             // 验证是否为管理员
-            if (!config.invite.adminQQs.includes(session.userId)) {
-                return '权限不足，只有管理员可以审核邀请。';
-            }
+            if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。';
 
             const inviteData = await getPendingInvite(ctx, groupId);
             if (!inviteData) {
@@ -193,9 +192,7 @@ export function apply(ctx: Context, config: Config) {
             if (!groupId) return '请指定群号。用法：reject <群号>';
 
             // 验证是否为管理员
-            if (!config.invite.adminQQs.includes(session.userId)) {
-                return '权限不足，只有管理员可以审核邀请。';
-            }
+            if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。';
 
             const inviteData = await getPendingInvite(ctx, groupId);
             if (!inviteData) {
