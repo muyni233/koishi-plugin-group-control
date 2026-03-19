@@ -19,10 +19,13 @@ export interface GroupConfig {
     muteNotificationMessage: string
 }
 
-export interface GroupInviteConfig {
-    enabled: boolean
+export interface AdminConfig {
     adminQQs: string[]
     notificationGroupId: string
+}
+
+export interface GroupInviteConfig {
+    enabled: boolean
     inviteWaitMessage: string
     inviteRequestMessage: string
     autoApprove: boolean
@@ -73,6 +76,7 @@ export interface PermissionConfig {
 }
 
 export interface Config {
+    admin: AdminConfig
     permission: PermissionConfig
     basic: GroupConfig
     invite: GroupInviteConfig
@@ -82,6 +86,12 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.intersect([
+    Schema.object({
+        admin: Schema.object({
+            adminQQs: Schema.array(String).default([]).description('管理员QQ号列表（权限验证及通知）'),
+            notificationGroupId: Schema.string().description('通知群号（填写后发到此群，否则私聊管理员）'),
+        }).description('管理员配置'),
+    }),
     Schema.object({
         permission: Schema.object({
             mode: Schema.union([
@@ -115,11 +125,9 @@ export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         invite: Schema.object({
             enabled: Schema.boolean().default(false).description('启用群聊邀请审核'),
-            adminQQs: Schema.array(String).default([]).description('管理员QQ号列表（权限验证及通知）'),
-            notificationGroupId: Schema.string().description('通知群号（填写后发到此群，否则私聊管理员）'),
             autoApprove: Schema.boolean().default(false).description('自动同意邀请（仅在未指定管理员时生效）'),
             inviteWaitMessage: Schema.string().default('已收到您的群聊邀请，正在等待管理员审核，请耐心等待。').description('发给邀请者的等待提示'),
-            inviteRequestMessage: Schema.string().default('收到新的群聊邀请请求：\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})\n\n请使用指令 approve {groupId} 同意或 reject {groupId} 拒绝。').description('发给管理员的请求消息模板，支持变量 {groupName}, {groupId}, {userName}, {userId}'),
+            inviteRequestMessage: Schema.string().default('收到新的群聊邀请请求：\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})\n\n请使用指令 gc.approve {groupId} 同意或 gc.reject {groupId} 拒绝。').description('发给管理员的请求消息模板，支持变量 {groupName}, {groupId}, {userName}, {userId}'),
             inviteExpireDays: Schema.number().default(3).description('邀请记录过期天数'),
             showDetailedLog: Schema.boolean().default(false).description('显示详细日志'),
         }).description('群聊邀请审核'),
@@ -130,7 +138,7 @@ export const Config: Schema<Config> = Schema.intersect([
             autoApprove: Schema.boolean().default(false).description('自动通过好友申请（否则通知管理员手动处理）'),
             notifyAdminOnApprove: Schema.boolean().default(true).description('自动通过时是否仍通知管理员'),
             requestExpireDays: Schema.number().default(7).description('待处理申请的过期天数'),
-            requestMessage: Schema.string().default('收到新的好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}\n\n使用 friend-approve {userId} 同意或 friend-reject {userId} 拒绝。').description('通知管理员的消息模板，支持变量 {userId}, {nickname}, {comment}'),
+            requestMessage: Schema.string().default('收到新的好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}\n\n使用 gc.fa {userId} 同意或 gc.fr {userId} 拒绝。').description('通知管理员的消息模板，支持变量 {userId}, {nickname}, {comment}'),
             approveNotificationMessage: Schema.string().default('已自动通过好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}').description('自动通过时的通知模板，支持变量 {userId}, {nickname}, {comment}'),
         }).description('好友申请管理'),
     }),

@@ -17,10 +17,12 @@ export interface GroupConfig {
     notifyAdminOnMute: boolean;
     muteNotificationMessage: string;
 }
-export interface GroupInviteConfig {
-    enabled: boolean;
+export interface AdminConfig {
     adminQQs: string[];
     notificationGroupId: string;
+}
+export interface GroupInviteConfig {
+    enabled: boolean;
     inviteWaitMessage: string;
     inviteRequestMessage: string;
     autoApprove: boolean;
@@ -66,6 +68,7 @@ export interface PermissionConfig {
     protectedCommands: string[];
 }
 export interface Config {
+    admin: AdminConfig;
     permission: PermissionConfig;
     basic: GroupConfig;
     invite: GroupInviteConfig;

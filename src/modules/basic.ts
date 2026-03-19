@@ -2,7 +2,7 @@ import { Context } from 'koishi'
 import { Config } from '../config'
 import { notifyAdmins, hasGuildPermission } from '../utils'
 import { approvedGroups } from '../state'
-import { isInSmallGroupWhitelist } from '../database'
+import { isInSmallGroupWhitelist, getPendingInvite, removePendingInvite } from '../database'
 
 export const name = 'group-control-basic'
 
@@ -44,6 +44,7 @@ export function apply(ctx: Context, config: Config) {
 
     ctx.on('guild-added', async (session) => {
         const { guildId, platform } = session;
+        ctx.logger('group-control-basic').info(`[guild-added] 触发！guildId=${guildId}, platform=${platform}`)
 
         // 检查黑名单
         if (config.basic.enableBlacklist) {
@@ -63,7 +64,12 @@ export function apply(ctx: Context, config: Config) {
             const wasApproved = approvedGroups.has(guildId);
             if (wasApproved) approvedGroups.delete(guildId); // 用完即清理
 
-            if (inWhitelist || wasApproved) {
+            // 检查是否有待处理的邀请记录（管理员手动通过邀请时也会有记录）
+            const pendingInvite = await getPendingInvite(ctx, guildId);
+            const hadPendingInvite = !!pendingInvite;
+            if (hadPendingInvite) await removePendingInvite(ctx, guildId); // 已入群，清理记录
+
+            if (inWhitelist || wasApproved || hadPendingInvite) {
                 // 跳过小群检测
             } else {
                 const delay = config.basic.smallGroupCheckDelay || 3000;

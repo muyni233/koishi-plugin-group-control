@@ -199,7 +199,7 @@ export async function getAllPendingInvites(ctx: Context) {
 }
 
 export async function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number) {
-    const cutoff = Date.now() - expireTimeMs;
+    const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
     const all = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
     const expired = all.filter(r => r.time < cutoff);
     for (const record of expired) {
@@ -227,7 +227,7 @@ export async function getAllPendingFriendRequests(ctx: Context, platform: string
 }
 
 export async function clearExpiredPendingFriendRequests(ctx: Context, platform: string, expireTimeMs: number) {
-    const cutoff = Date.now() - expireTimeMs;
+    const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
     const all = await ctx.model.get('pending_friend_request', { platform });
     const expired = all.filter(r => r.time < cutoff);
     for (const record of expired) {

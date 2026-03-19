@@ -16,16 +16,16 @@ export function formatDate(timestamp: number): string {
 }
 
 export async function notifyAdmins(bot: any, config: Config, message: string) {
-    if (config.invite.notificationGroupId) {
+    if (config.admin.notificationGroupId) {
         try {
-            await bot.sendMessage(config.invite.notificationGroupId, message);
+            await bot.sendMessage(config.admin.notificationGroupId, message);
             return;
         } catch (error) {
-            console.error(`发送通知到通知群 ${config.invite.notificationGroupId} 失败:`, error);
+            console.error(`发送通知到通知群 ${config.admin.notificationGroupId} 失败:`, error);
         }
     }
-    if (config.invite.adminQQs?.length > 0) {
-        for (const adminQQ of config.invite.adminQQs) {
+    if (config.admin.adminQQs?.length > 0) {
+        for (const adminQQ of config.admin.adminQQs) {
             try {
                 await bot.sendPrivateMessage(adminQQ, message);
             } catch (error) {
@@ -41,7 +41,7 @@ export function isGlobalAdmin(session: Session, config: Config): boolean {
         const user = session.user as any;
         return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority;
     }
-    return config.invite.adminQQs?.includes(session.userId) ?? false;
+    return config.admin.adminQQs?.includes(session.userId) ?? false;
 }
 
 /** 是否为群管理员或群主（仅 builtin 模式使用） */
@@ -77,7 +77,7 @@ export async function hasGuildPermission(session: Session, config: Config): Prom
     return await isGuildAdmin(session);
 }
 
-// 检查全局管理权限（ban/sg-add/approve/reject/pending/friend-approve 等）
+// 检查全局管理权限（gc.ban/gc.approve/gc.fa 等）
 // builtin 模式：仅全局管理员（adminQQs）；koishi 模式：由 authority 决定
 export function hasGlobalPermission(session: Session, config: Config): boolean {
     return isGlobalAdmin(session, config);
@@ -86,8 +86,8 @@ export function hasGlobalPermission(session: Session, config: Config): boolean {
 /** 管理指令列表 - 这些指令始终不受 bot-off 影响 */
 export const ADMIN_COMMANDS = new Set([
     'bot-on', 'bot-off', 'quit',
-    'banlist', 'unban', 'ban', 'clearban',
-    'approve', 'reject', 'pending',
-    'sg-add', 'sg-rm', 'sg-list',
-    'friend-pending', 'friend-approve', 'friend-reject',
+    'gc', 'gc.banlist', 'gc.unban', 'gc.ban', 'gc.clearban',
+    'gc.approve', 'gc.reject', 'gc.pending',
+    'gc.sg-add', 'gc.sg-rm', 'gc.sg-list',
+    'gc.fp', 'gc.fa', 'gc.fr',
 ]);

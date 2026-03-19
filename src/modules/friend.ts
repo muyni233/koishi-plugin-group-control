@@ -54,7 +54,7 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // 存入数据库
-        await addPendingFriendRequest(ctx, platform, { userId, nickname, comment, flag, time: Date.now() })
+        await addPendingFriendRequest(ctx, platform, { userId, nickname, comment, flag, time: Math.floor(Date.now() / 1000) })
 
         // 通知管理员
         const msg = config.friend.requestMessage
@@ -66,24 +66,24 @@ export function apply(ctx: Context, config: Config) {
 
     // ── 指令 ──────────────────────────────────────────────
 
-    ctx.command('friend-pending', '查看待处理的好友申请')
+    ctx.command('gc.fp', '查看待处理的好友申请')
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足。'
             const all = await getAllPendingFriendRequests(ctx, session.platform)
             if (all.length === 0) return '当前没有待处理的好友申请。'
             const lines = ['待处理好友申请列表：']
             for (const r of all) {
-                const elapsed = Math.floor((Date.now() - r.time) / 1000 / 60)
+                const elapsed = Math.floor((Date.now() / 1000 - r.time) / 60)
                 lines.push(`- ${r.nickname}（${r.userId}）附言：${r.comment || '无'} · ${elapsed} 分钟前`)
-                lines.push(`  同意：friend-approve ${r.userId} | 拒绝：friend-reject ${r.userId}`)
+                lines.push(`  同意：gc.fa ${r.userId} | 拒绝：gc.fr ${r.userId}`)
             }
             return lines.join('\n')
         })
 
-    ctx.command('friend-approve <userId:string>', '同意好友申请')
+    ctx.command('gc.fa <userId:string>', '同意好友申请')
         .action(async ({ session }, userId) => {
             if (!hasGlobalPermission(session, config)) return '权限不足。'
-            if (!userId) return '请指定QQ号。用法：friend-approve <QQ号>'
+            if (!userId) return '请指定QQ号。用法：gc.fa <QQ号>'
             const record = await getPendingFriendRequest(ctx, session.platform, userId)
             if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
             try {
@@ -95,10 +95,10 @@ export function apply(ctx: Context, config: Config) {
             }
         })
 
-    ctx.command('friend-reject <userId:string>', '拒绝好友申请')
+    ctx.command('gc.fr <userId:string>', '拒绝好友申请')
         .action(async ({ session }, userId) => {
             if (!hasGlobalPermission(session, config)) return '权限不足。'
-            if (!userId) return '请指定QQ号。用法：friend-reject <QQ号>'
+            if (!userId) return '请指定QQ号。用法：gc.fr <QQ号>'
             const record = await getPendingFriendRequest(ctx, session.platform, userId)
             if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
             try {

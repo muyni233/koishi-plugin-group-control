@@ -26,7 +26,12 @@ export function apply(ctx: Context, config: Config) {
     }, 60 * 60 * 1000);
 
     // 监听群聊邀请事件
+    ctx.logger('group-control-invite').info('invite 模块已加载，正在监听 guild-request 事件')
+
     ctx.on('guild-request', async (session) => {
+        ctx.logger('group-control-invite').info(`[guild-request] 触发！userId=${session.userId}, guildId=${session.guildId}, messageId=${session.messageId}, type=${session.type}, subtype=${(session as any).subtype}`)
+        ctx.logger('group-control-invite').info(`[guild-request] event 对象: ${JSON.stringify(session.event, null, 2)}`)
+
         // 直接从原始数据获取 ID
         const raw = (session as any).original || (session as any).raw || (session.event as any)?._data || {};
 
@@ -79,7 +84,7 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // 自动同意逻辑
-        if (!config.invite.adminQQs || config.invite.adminQQs.length === 0) {
+        if (!config.admin.adminQQs || config.admin.adminQQs.length === 0) {
             if (config.invite.autoApprove) {
                 try {
                     await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
@@ -101,7 +106,7 @@ export function apply(ctx: Context, config: Config) {
             userId: rawUserId,
             userName: userName,
             groupName: groupName,
-            time: Date.now(),
+            time: Math.floor(Date.now() / 1000),
             flag: flag
         });
 
@@ -114,21 +119,21 @@ export function apply(ctx: Context, config: Config) {
         let requestSent = false;
 
         // 1. 发送到通知群
-        if (config.invite.notificationGroupId) {
+        if (config.admin.notificationGroupId) {
             try {
-                await session.bot.sendMessage(config.invite.notificationGroupId, requestMessage);
+                await session.bot.sendMessage(config.admin.notificationGroupId, requestMessage);
                 requestSent = true;
                 if (config.invite.showDetailedLog) {
-                    console.log(`发送邀请请求到通知群 ${config.invite.notificationGroupId}`);
+                    console.log(`发送邀请请求到通知群 ${config.admin.notificationGroupId}`);
                 }
             } catch (error) {
-                console.error(`发送邀请请求到通知群 ${config.invite.notificationGroupId} 失败:`, error);
+                console.error(`发送邀请请求到通知群 ${config.admin.notificationGroupId} 失败:`, error);
             }
         }
 
         // 2. 发送私聊给管理员
-        if (!config.invite.notificationGroupId) {
-            for (const adminQQ of config.invite.adminQQs) {
+        if (!config.admin.notificationGroupId) {
+            for (const adminQQ of config.admin.adminQQs) {
                 try {
                     await session.bot.sendPrivateMessage(adminQQ, requestMessage);
                     requestSent = true;
@@ -149,9 +154,9 @@ export function apply(ctx: Context, config: Config) {
     // ======== 注册审核指令 ========
 
     // 同意邀请指令
-    ctx.command('approve <groupId:string>', '同意群聊邀请')
+    ctx.command('gc.approve <groupId:string>', '同意群聊邀请')
         .action(async ({ session }, groupId) => {
-            if (!groupId) return '请指定群号。用法：approve <群号>';
+            if (!groupId) return '请指定群号。用法：gc.approve <群号>';
 
             // 验证是否为管理员
             if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。';
@@ -187,9 +192,9 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 拒绝邀请指令
-    ctx.command('reject <groupId:string>', '拒绝群聊邀请')
+    ctx.command('gc.reject <groupId:string>', '拒绝群聊邀请')
         .action(async ({ session }, groupId) => {
-            if (!groupId) return '请指定群号。用法：reject <群号>';
+            if (!groupId) return '请指定群号。用法：gc.reject <群号>';
 
             // 验证是否为管理员
             if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。';
@@ -222,9 +227,9 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 查看待处理邀请指令
-    ctx.command('pending', '查看待处理的群聊邀请')
+    ctx.command('gc.pending', '查看待处理的群聊邀请')
         .action(async ({ session }) => {
-            if (!config.invite.adminQQs.includes(session.userId)) {
+            if (!config.admin.adminQQs.includes(session.userId)) {
                 return '权限不足，只有管理员可以查看待处理邀请。';
             }
 
@@ -235,11 +240,11 @@ export function apply(ctx: Context, config: Config) {
 
             const lines = ['待处理的群聊邀请列表：'];
             for (const invite of allInvites) {
-                const elapsed = Math.floor((Date.now() - invite.time) / 1000 / 60);
+                const elapsed = Math.floor((Date.now() / 1000 - invite.time) / 60);
                 lines.push(`- 群：${invite.groupName}（${invite.groupId}）`);
                 lines.push(`  邀请者：${invite.userName}（${invite.userId}）`);
                 lines.push(`  ${elapsed} 分钟前`);
-                lines.push(`  同意：approve ${invite.groupId} | 拒绝：reject ${invite.groupId}`);
+                lines.push(`  同意：gc.approve ${invite.groupId} | 拒绝：gc.reject ${invite.groupId}`);
             }
             return lines.join('\n');
         });
