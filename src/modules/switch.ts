@@ -98,7 +98,9 @@ export function apply(ctx: Context, config: Config) {
         if (isBotEnabled) {
             return next(); // 如果已开启，则放行
         }
-
+        if (ADMIN_COMMANDS.has(session["event"]["_data"]["message"])) {
+            return next();// 放行admin_command
+        }
         // 在已关闭状态下：
         // 检查是否有 @ 机器人
         const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs.id === session.bot.userId);
