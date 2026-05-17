@@ -1,7 +1,7 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
 import { approvedGroups } from '../state'
-import { hasGlobalPermission } from '../utils'
+import { hasGlobalPermission, notifyAdmins } from '../utils'
 import {
     getPendingInvite, addPendingInvite, removePendingInvite,
     getAllPendingInvites, clearExpiredPendingInvites
@@ -70,6 +70,46 @@ export function apply(ctx: Context, config: Config) {
             console.error('获取群信息失败:', error);
         }
 
+        // 自动同意逻辑（无论是否配置管理员均可生效）
+        if (config.invite.autoApprove) {
+            try {
+                await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
+                // 记录已审核通过
+                approvedGroups.add(rawGroupId);
+                if (config.invite.showDetailedLog) {
+                    console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
+                }
+            } catch (error) {
+                console.error('自动同意群聊邀请失败:', error);
+                return;
+            }
+
+            // 通知邀请者已自动通过
+            try {
+                const approveMessage = config.invite.inviteApproveMessage
+                    .replaceAll('{groupName}', groupName)
+                    .replaceAll('{groupId}', rawGroupId)
+                    .replaceAll('{userName}', userName)
+                    .replaceAll('{userId}', rawUserId);
+                await session.bot.sendPrivateMessage(rawUserId, approveMessage);
+            } catch (error) {
+                console.error(`发送自动通过提示给 ${rawUserId} 失败:`, error);
+            }
+
+            // 通知管理员
+            if (config.invite.notifyAdminOnApprove) {
+                const notifyMessage = config.invite.inviteApproveNotificationMessage
+                    .replaceAll('{groupName}', groupName)
+                    .replaceAll('{groupId}', rawGroupId)
+                    .replaceAll('{userName}', userName)
+                    .replaceAll('{userId}', rawUserId);
+                await notifyAdmins(session.bot, config, notifyMessage);
+            }
+            return;
+        }
+
+        // 以下为人工审核流程
+
         // 发送等待审核提示给邀请者
         try {
             const waitMessage = config.invite.inviteWaitMessage
@@ -83,22 +123,7 @@ export function apply(ctx: Context, config: Config) {
             console.error(`发送等待审核提示给 ${rawUserId} 失败:`, error);
         }
 
-        // 自动同意逻辑（无论是否配置管理员均可生效）
-        if (config.invite.autoApprove) {
-            try {
-                await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
-                // 记录已审核通过
-                approvedGroups.add(rawGroupId);
-                if (config.invite.showDetailedLog) {
-                    console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
-                }
-            } catch (error) {
-                console.error('自动同意群聊邀请失败:', error);
-            }
-            return;
-        }
-
-        // 未配置管理员且未开启自动同意时，直接返回
+        // 未配置管理员时，无人审核，直接返回
         if (!config.admin.adminQQs || config.admin.adminQQs.length === 0) {
             return;
         }
