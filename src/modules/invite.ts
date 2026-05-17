@@ -83,20 +83,23 @@ export function apply(ctx: Context, config: Config) {
             console.error(`发送等待审核提示给 ${rawUserId} 失败:`, error);
         }
 
-        // 自动同意逻辑
-        if (!config.admin.adminQQs || config.admin.adminQQs.length === 0) {
-            if (config.invite.autoApprove) {
-                try {
-                    await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
-                    // 记录已审核通过
-                    approvedGroups.add(rawGroupId);
-                    if (config.invite.showDetailedLog) {
-                        console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
-                    }
-                } catch (error) {
-                    console.error('自动同意群聊邀请失败:', error);
+        // 自动同意逻辑（无论是否配置管理员均可生效）
+        if (config.invite.autoApprove) {
+            try {
+                await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
+                // 记录已审核通过
+                approvedGroups.add(rawGroupId);
+                if (config.invite.showDetailedLog) {
+                    console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
                 }
+            } catch (error) {
+                console.error('自动同意群聊邀请失败:', error);
             }
+            return;
+        }
+
+        // 未配置管理员且未开启自动同意时，直接返回
+        if (!config.admin.adminQQs || config.admin.adminQQs.length === 0) {
             return;
         }
 

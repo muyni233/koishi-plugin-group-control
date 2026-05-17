@@ -125,7 +125,7 @@ export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         invite: Schema.object({
             enabled: Schema.boolean().default(false).description('启用群聊邀请审核'),
-            autoApprove: Schema.boolean().default(false).description('自动同意邀请（仅在未指定管理员时生效）'),
+            autoApprove: Schema.boolean().default(false).description('自动同意邀请'),
             inviteWaitMessage: Schema.string().default('已收到您的群聊邀请，正在等待管理员审核，请耐心等待。').description('发给邀请者的等待提示'),
             inviteRequestMessage: Schema.string().default('收到新的群聊邀请请求：\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})\n\n请使用指令 gc.approve {groupId} 同意或 gc.reject {groupId} 拒绝。').description('发给管理员的请求消息模板，支持变量 {groupName}, {groupId}, {userName}, {userId}'),
             inviteExpireDays: Schema.number().default(3).description('邀请记录过期天数'),
