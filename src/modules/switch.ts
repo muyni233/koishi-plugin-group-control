@@ -98,8 +98,11 @@ export function apply(ctx: Context, config: Config) {
         if (isBotEnabled) {
             return next(); // 如果已开启，则放行
         }
-        if (ADMIN_COMMANDS.has(session["event"]["_data"]["message"])) {
-            return next();// 放行admin_command
+        // 放行管理指令：从消息文本中提取首个词与 ADMIN_COMMANDS 比对
+        const content = session.stripped?.content ?? session.content ?? '';
+        const firstWord = content.match(/^\s*[/.!！。]*(\S+)/)?.[1];
+        if (firstWord && ADMIN_COMMANDS.has(firstWord)) {
+            return next();
         }
         // 在已关闭状态下：
         // 检查是否有 @ 机器人
