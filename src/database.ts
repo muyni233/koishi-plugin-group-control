@@ -153,13 +153,21 @@ export async function updateCommandFrequencyRecord(ctx: Context, platform: strin
     }]);
 }
 
+const groupBotStatusCache = new Map<string, GroupBotStatus | null>();
+const groupBotStatusCacheKey = (platform: string, guildId: string) => `${platform}:${guildId}`;
+
 export async function getGroupBotStatus(ctx: Context, platform: string, guildId: string): Promise<GroupBotStatus | null> {
+    const key = groupBotStatusCacheKey(platform, guildId);
+    if (groupBotStatusCache.has(key)) return groupBotStatusCache.get(key);
     const records = await ctx.model.get('group_bot_status', { platform, guildId });
-    return records.length > 0 ? records[0] : null;
+    const status = records.length > 0 ? records[0] : null;
+    groupBotStatusCache.set(key, status);
+    return status;
 }
 
 export async function setGroupBotStatus(ctx: Context, platform: string, guildId: string, botEnabled: boolean) {
     await ctx.model.upsert('group_bot_status', [{ platform, guildId, botEnabled }]);
+    groupBotStatusCache.set(groupBotStatusCacheKey(platform, guildId), { platform, guildId, botEnabled });
 }
 
 // 小群白名单管理
