@@ -4,7 +4,8 @@ import { approvedGroups } from '../state'
 import { hasGlobalPermission, notifyAdmins } from '../utils'
 import {
     getPendingInvite, addPendingInvite, removePendingInvite,
-    getAllPendingInvites, clearExpiredPendingInvites
+    getAllPendingInvites, clearExpiredPendingInvites,
+    getBlacklistedGuild
 } from '../database'
 
 export const name = 'group-control-invite'
@@ -43,6 +44,34 @@ export function apply(ctx: Context, config: Config) {
         const rawGroupId = raw.group_id ? String(raw.group_id) : session.guildId;
 
         const { platform } = session;
+
+        // 黑名单拦截：已被拉黑的群邀请一律自动拒绝（不进群、不通知管理员审核）
+        if (config.basic.enableBlacklist && rawGroupId && /^\d+$/.test(String(rawGroupId))) {
+            const bl = await getBlacklistedGuild(ctx, String(rawGroupId));
+            if (bl.length > 0) {
+                // 尝试拒绝邀请（flag 有可能已失效，做 best-effort）
+                try {
+                    await session.bot.internal.setGroupAddRequest(flag, 'invite', false, '该群已被机器人拉黑');
+                } catch (e) {
+                    ctx.logger('group-control-invite').warn('拒绝黑名单群邀请失败 (flag 可能已失效):', e);
+                }
+
+                // 通知管理员（告知已自动拒绝，以及如何放行）
+                const rejectNotify = `已自动拒绝黑名单群邀请\n群号：${rawGroupId}\n邀请者 QQ：${rawUserId}\n如需放行请先执行 gc.unban ${rawGroupId} 再让对方重新邀请。`;
+                try { await notifyAdmins(session.bot, config, rejectNotify); } catch (e) { }
+
+                // 通知邀请者
+                try {
+                    const rejectMsg = `您邀请加入的群 ${rawGroupId} 已被机器人拉黑，邀请已被自动拒绝。如有疑问请联系机器人管理员。`;
+                    await session.bot.sendPrivateMessage(rawUserId, rejectMsg);
+                } catch (e) { }
+
+                if (config.invite.showDetailedLog) {
+                    console.log(`已自动拒绝黑名单群邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
+                }
+                return;
+            }
+        }
 
         if (!flag && config.invite.showDetailedLog) {
             console.warn('未能提取到邀请 flag，可能导致无法处理邀请。Raw event:', JSON.stringify(raw));
@@ -188,6 +217,14 @@ export function apply(ctx: Context, config: Config) {
 
             // 验证是否为管理员
             if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。';
+
+            // 黑名单拦截：若群已在黑名单中，拒绝通过审核（否则机器人进群后会被立即踢出）
+            if (config.basic.enableBlacklist) {
+                const bl = await getBlacklistedGuild(ctx, groupId);
+                if (bl.length > 0) {
+                    return `群 ${groupId} 在黑名单中，无法通过审核。如需放行请先执行 gc.unban ${groupId}。`;
+                }
+            }
 
             const inviteData = await getPendingInvite(ctx, groupId);
             if (!inviteData) {

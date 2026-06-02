@@ -30,6 +30,12 @@ export interface SmallGroupWhitelist {
     guildId: string
 }
 
+export interface SelfLeftGuild {
+    platform: string
+    guildId: string
+    timestamp: number
+}
+
 export interface PendingInvite {
     platform: string
     groupId: string
@@ -55,6 +61,7 @@ declare module 'koishi' {
         command_frequency_record: CommandFrequencyRecord
         group_bot_status: GroupBotStatus
         small_group_whitelist: SmallGroupWhitelist
+        self_left_guild: SelfLeftGuild
         pending_invite: PendingInvite
         pending_friend_request: PendingFriendRequest
     }
@@ -91,6 +98,12 @@ export function apply(ctx: Context) {
     ctx.model.extend('small_group_whitelist', {
         platform: 'string',
         guildId: 'string',
+    }, { primary: ['platform', 'guildId'] })
+
+    ctx.model.extend('self_left_guild', {
+        platform: 'string',
+        guildId: 'string',
+        timestamp: 'integer',
     }, { primary: ['platform', 'guildId'] })
 
     ctx.model.extend('pending_invite', {
@@ -138,6 +151,52 @@ export async function getAllBlacklistedGuilds(ctx: Context) {
 
 export async function clearBlacklistedGuilds(ctx: Context) {
     return await ctx.model.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
+}
+
+/** 统一写入被踢黑名单行，保证 platform = BLACKLIST_PLATFORM */
+export async function blacklistKicked(ctx: Context, guildId: string) {
+    return await ctx.model.upsert('blacklisted_guild', [{
+        platform: BLACKLIST_PLATFORM,
+        guildId,
+        timestamp: Math.floor(Date.now() / 1000),
+        reason: 'kicked',
+    }]);
+}
+
+// ── 持久化「主动退群」标记，用于 guild-removed 区分主动退 vs 被踢 ──
+
+/** 在主动退群前写入标记，让 guild-removed 能区分「自己退的」和「被踢的」*/
+export async function markSelfLeft(ctx: Context, guildId: string) {
+    await ctx.model.upsert('self_left_guild', [{
+        platform: BLACKLIST_PLATFORM,
+        guildId,
+        timestamp: Math.floor(Date.now() / 1000),
+    }]);
+}
+
+/** 消费标记（单次读取后删除），返回是否在 maxAgeSec 内。用于 guild-removed 判断是自己退的 */
+export async function consumeSelfLeft(ctx: Context, guildId: string, maxAgeSec = 120): Promise<boolean> {
+    const [row] = await ctx.model.get('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    if (!row) return false;
+    // 无论超不超时都清理，防止堆积
+    await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    return (Math.floor(Date.now() / 1000) - row.timestamp) <= maxAgeSec;
+}
+
+/** 清理标记（退群失败时回滚，或 unban 时清理）*/
+export async function clearSelfLeft(ctx: Context, guildId: string) {
+    await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+}
+
+/** 定期清理过期的主动退群标记（超过 maxAgeSec 秒未消费的）*/
+export async function clearExpiredSelfLeft(ctx: Context, maxAgeSec = 300) {
+    const cutoff = Math.floor(Date.now() / 1000) - maxAgeSec;
+    const all = await ctx.model.get('self_left_guild', { platform: BLACKLIST_PLATFORM });
+    const expired = all.filter(r => r.timestamp < cutoff);
+    for (const record of expired) {
+        await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: record.guildId });
+    }
+    return expired.length;
 }
 
 export async function getCommandFrequencyRecord(ctx: Context, platform: string, guildId: string) {

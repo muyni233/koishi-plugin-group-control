@@ -3,7 +3,8 @@ import { Config } from '../config'
 import { isBlacklistEnabled, parseGuildId, formatDate, hasGlobalPermission } from '../utils'
 import {
     getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
-    addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist
+    addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist,
+    clearSelfLeft
 } from '../database'
 
 export const name = 'group-control-commands'
@@ -30,6 +31,8 @@ export function apply(ctx: Context, config: Config) {
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
             const guildId = parseGuildId(input); if (!guildId) return `输入格式错误。`;
             const removed = await removeBlacklistedGuild(ctx, guildId);
+            // 同时清理可能残留的主动退群标记，保证 unban 后新踢能正常检测
+            await clearSelfLeft(ctx, guildId);
             return removed ? `已移除群聊 ${guildId}` : `群聊 ${guildId} 不在黑名单中。`;
         });
 

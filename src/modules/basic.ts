@@ -2,7 +2,7 @@ import { Context } from 'koishi'
 import { Config } from '../config'
 import { notifyAdmins, hasGuildPermission } from '../utils'
 import { approvedGroups } from '../state'
-import { isInSmallGroupWhitelist, getPendingInvite, removePendingInvite } from '../database'
+import { isInSmallGroupWhitelist, getPendingInvite, removePendingInvite, markSelfLeft, consumeSelfLeft, clearSelfLeft, clearExpiredSelfLeft, blacklistKicked, BLACKLIST_PLATFORM } from '../database'
 
 export const name = 'group-control-basic'
 
@@ -42,16 +42,24 @@ export function apply(ctx: Context, config: Config) {
         }
     }, 30 * 1000);
 
+    // 定期清理过期的持久化主动退群标记（guild-removed 未触发时的兜底）
+    setInterval(async () => {
+        try {
+            await clearExpiredSelfLeft(ctx);  // 默认 5 分钟过期
+        } catch { /* 静默忽略清理失败 */ }
+    }, 5 * 60 * 1000);
+
     ctx.on('guild-added', async (session) => {
         const { guildId, platform } = session;
         ctx.logger('group-control-basic').info(`[guild-added] 触发！guildId=${guildId}, platform=${platform}`)
 
         // 检查黑名单
         if (config.basic.enableBlacklist) {
-            const [blacklisted] = await ctx.model.get('blacklisted_guild', { platform, guildId });
+            const [blacklisted] = await ctx.model.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
             if (blacklisted) {
                 try { await session.bot.sendMessage(guildId, config.basic.blacklistMessage, platform); } catch (e) { }
-                quittingGuilds.set(`${platform}:${guildId}`, Date.now());
+                quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
+                await markSelfLeft(ctx, guildId);  // 持久标记：防止重启/HMR后 guild-removed 误判为被踢
                 try { await session.bot.internal.setGroupLeave(parseInt(guildId)); } catch (e) { }
                 return;
             }
@@ -124,12 +132,14 @@ export function apply(ctx: Context, config: Config) {
                             }
 
                             // 标记为主动退出，避免触发被踢拉黑逻辑
-                            quittingGuilds.set(`${platform}:${guildId}`, Date.now());
+                            quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
+                            await markSelfLeft(ctx, guildId);
                             try {
                                 await session.bot.internal.setGroupLeave(parseInt(guildId));
                             } catch (e) {
                                 console.error(`小群自动退群失败 (群号: ${guildId}):`, e);
-                                quittingGuilds.delete(`${platform}:${guildId}`);
+                                quittingGuilds.delete(`${BLACKLIST_PLATFORM}:${guildId}`);
+                                await clearSelfLeft(ctx, guildId);
                             }
                         } else if (memberCount > config.basic.smallGroupThreshold) {
                             // 人数达标但未经审核，通知管理员
@@ -157,35 +167,56 @@ export function apply(ctx: Context, config: Config) {
     });
 
     ctx.on('guild-removed', async (session) => {
-        const { guildId, platform } = session;
-        const quittingKey = `${platform}:${guildId}`;
+        const { guildId } = session;
+        // 统一使用 BLACKLIST_PLATFORM，确保与 gc.ban/gc.unban 操作同一行
+        const platform = BLACKLIST_PLATFORM;
+        const dedupKey = `${platform}:${guildId}`;
 
-        // 主动退出的不处理（保留记录不删除，防止多次触发时第二次穿透）
-        if (quittingGuilds.has(quittingKey)) {
+        // 1) 在进程内主动退群的，快速放行（同时消费持久标记，防止堆积）
+        if (quittingGuilds.has(dedupKey)) {
+            // 有持久标记也一并清理（不做 consumeSelfLeft 因为不需要读，直接删更干净）
+            try { await clearSelfLeft(ctx, guildId); } catch { }
             return;
         }
 
-        // 去重：防止同一群的踢出事件被多次处理
-        if (processedKicks.has(quittingKey)) {
-            return;
+        // 2) 持久化主动退群标记：跨重启/HMR 仍然有效
+        const isSelfLeft = await consumeSelfLeft(ctx, guildId);
+        if (isSelfLeft) return;
+
+        // 3) 根据 OneBot 原始事件判断是主动退 (leave) 还是被踢 (kick_me/kick)
+        //    有 sub_type === 'leave' 明确为主动退出，不作为被踢处理
+        const raw = (session.event as any)?._data || (session as any).original || (session as any).onebot || {};
+        const subType = String(raw.sub_type ?? (session as any).subtype ?? '');
+        const eventTs = typeof raw.time === 'number' ? raw.time : Math.floor(Date.now() / 1000);
+        const ageSec = Math.floor(Date.now() / 1000) - eventTs;
+
+        // 明确的主动退群 (OneBot group_decrease sub_type === 'leave')
+        if (subType === 'leave') return;
+
+        // 4) 过旧事件：可能是重连重放，忽略（仅在无 sub_type 时兜底；有 sub_type 的已在上方处理）
+        if (!subType && ageSec > 60) return;
+
+        // 5) 进程内去重（同名群 60s 内只处理一次）
+        if (processedKicks.has(dedupKey)) return;
+        processedKicks.set(dedupKey, Date.now());
+
+        // 6) 持久化幂等：已经被自动踢出拉黑的（reason === 'kicked'）不再重复通知
+        if (config.basic.enableBlacklist || config.basic.notifyAdminOnKick) {
+            const [existing] = await ctx.model.get('blacklisted_guild', { platform, guildId });
+            if (existing && existing.reason === 'kicked') {
+                // 已拉黑过，视为重复事件，跳过（但不跳过手动拉黑 manual_add 的后续真踢通知）
+                return;
+            }
         }
-        processedKicks.set(quittingKey, Date.now());
 
-        // 尝试获取群名称（被踢后可能已无法获取，降级为 '未知'）
-        const groupName = await getGroupName(session.bot, guildId);
-
-        // 被踢出 —— 加入黑名单
+        // 7) 写入黑名单（仅 enableBlacklist 开启时）
         if (config.basic.enableBlacklist) {
-            await ctx.model.upsert('blacklisted_guild', [{
-                platform,
-                guildId,
-                timestamp: Math.floor(Date.now() / 1000),
-                reason: 'kicked'
-            }]);
+            await blacklistKicked(ctx, guildId);
         }
 
-        // 被踢出 —— 通知管理员
+        // 8) 通知管理员（独立于 enableBlacklist 的开关）
         if (config.basic.notifyAdminOnKick) {
+            const groupName = await getGroupName(session.bot, guildId);
             const kickMsg = config.basic.kickNotificationMessage
                 .replaceAll('{groupId}', guildId)
                 .replaceAll('{groupName}', groupName);
@@ -241,14 +272,16 @@ export function apply(ctx: Context, config: Config) {
                 const adminMsg = `收到来自 ${userId} 的退群指令\n群名称：${groupName}\n群号：${guildId}`;
                 await notifyAdmins(session.bot, config, adminMsg);
 
-                quittingGuilds.set(`${platform}:${guildId}`, Date.now());
+                quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
+                await markSelfLeft(ctx, guildId);
                 try {
                     await session.bot.sendMessage(session.guildId, config.basic.quitMessage.replace('{userId}', userId), platform);
                 } catch (e) { }
                 try {
                     await session.bot.internal.setGroupLeave(parseInt(guildId));
                 } catch (e) {
-                    quittingGuilds.delete(`${platform}:${guildId}`);
+                    quittingGuilds.delete(`${BLACKLIST_PLATFORM}:${guildId}`);
+                    await clearSelfLeft(ctx, guildId);
                     return `退出失败: ${e.message}`;
                 }
                 return '';
