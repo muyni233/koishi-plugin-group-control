@@ -1,11 +1,10 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { approvedGroups } from '../state'
 import { hasGlobalPermission, notifyAdmins } from '../utils'
 import {
     getPendingInvite, addPendingInvite, removePendingInvite,
     getAllPendingInvites, clearExpiredPendingInvites,
-    getBlacklistedGuild
+    getBlacklistedGuild, markApprovedGuild
 } from '../database'
 
 export const name = 'group-control-invite'
@@ -17,9 +16,9 @@ export function apply(ctx: Context, config: Config) {
     setInterval(async () => {
         const expireMs = config.invite.inviteExpireDays * 24 * 60 * 60 * 1000;
         try {
-            const count = await clearExpiredPendingInvites(ctx, expireMs);
-            if (count > 0 && config.invite.showDetailedLog) {
-                console.log(`已自动清理 ${count} 个过期邀请`);
+            await clearExpiredPendingInvites(ctx, expireMs);
+            if (config.invite.showDetailedLog) {
+                console.log('已执行过期邀请清理');
             }
         } catch (error) {
             console.error('清理过期邀请失败:', error);
@@ -35,6 +34,12 @@ export function apply(ctx: Context, config: Config) {
 
         // 直接从原始数据获取 ID
         const raw = (session as any).original || (session as any).raw || (session.event as any)?._data || {};
+
+        // guild-request 同时涵盖「被邀请入群(invite)」与「用户申请加入(add)」两种子类型。
+        // 本模块只处理被邀请入群；若明确是用户申请进群(add)则跳过，避免误把进群申请当邀请处理。
+        const subType = String(raw.sub_type ?? (session as any).subtype ?? '');
+        if (subType && subType !== 'invite') return;
+
 
         // 提取 flag
         const flag = raw.flag || (session as any).flag || session.messageId;
@@ -103,8 +108,8 @@ export function apply(ctx: Context, config: Config) {
         if (config.invite.autoApprove) {
             try {
                 await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
-                // 记录已审核通过
-                approvedGroups.add(rawGroupId);
+                // 记录已审核通过（持久化，永久豁免小群检测，退群时清除）
+                await markApprovedGuild(ctx, rawGroupId);
                 if (config.invite.showDetailedLog) {
                     console.log(`自动同意群聊邀请: 群号 ${rawGroupId}, 邀请者 ${rawUserId}`);
                 }
@@ -239,7 +244,7 @@ export function apply(ctx: Context, config: Config) {
                 await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', true, '');
 
                 // 记录已审核通过，防止小群自动退群
-                approvedGroups.add(groupId);
+                await markApprovedGuild(ctx, groupId);
 
                 // 通知邀请者
                 try {
@@ -294,7 +299,7 @@ export function apply(ctx: Context, config: Config) {
     // 查看待处理邀请指令
     ctx.command('gc.pending', '查看待处理的群聊邀请')
         .action(async ({ session }) => {
-            if (!config.admin.adminQQs.includes(session.userId)) {
+            if (!hasGlobalPermission(session, config)) {
                 return '权限不足，只有管理员可以查看待处理邀请。';
             }
 

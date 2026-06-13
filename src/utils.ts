@@ -6,7 +6,8 @@ export function isBlacklistEnabled(config: Config['basic']): string | null {
     return null;
 }
 
-export function parseGuildId(input: string): string | null {
+export function parseGuildId(input: string | undefined | null): string | null {
+    if (!input) return null;  // 防止无参调用指令时 input 为 undefined 导致 .trim() 崩溃
     const match = input.trim().match(/^onebot:(\d+)$/);
     return match ? match[1] : (/^\d+$/.test(input.trim()) ? input.trim() : null);
 }
@@ -89,5 +90,6 @@ export const ADMIN_COMMANDS = new Set([
     'gc', 'gc.banlist', 'gc.unban', 'gc.ban', 'gc.clearban',
     'gc.approve', 'gc.reject', 'gc.pending',
     'gc.sg-add', 'gc.sg-rm', 'gc.sg-list',
+    'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
     'gc.fp', 'gc.fa', 'gc.fr',
 ]);

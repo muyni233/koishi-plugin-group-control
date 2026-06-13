@@ -12,6 +12,10 @@ export * from './config'
 
 export const name = 'group-control'
 
+// 插件依赖数据库服务，确保数据库就绪后再加载，规避初始化竞态
+export const inject = ['database']
+
+
 export function apply(ctx: Context, config: Config) {
   ctx.plugin(database)
   ctx.plugin(basic, config)

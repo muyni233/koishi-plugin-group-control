@@ -119,6 +119,10 @@ export function apply(ctx: Context, config: Config) {
     const freq = config.frequency
     if (!freq.enabled && !freq.privateEnabled) return
 
+    // 记录本条消息是否已被中间件计数，避免同一条消息（私聊指令 / @bot 指令）
+    // 在中间件和 command/before-execute 中被重复计数（双重消耗频率额度）
+    const countedSessions = new WeakSet<Session>()
+
     async function checkFrequency(session: Session, isCommand: boolean): Promise<boolean> {
         const isPrivate = !session.guildId
         const platform = session.platform
@@ -180,6 +184,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.on('command/before-execute', async (argv) => {
         const session = argv.session
         if (isSystemSession(session)) return
+        // 若该消息已在中间件阶段计数（私聊指令 / @bot 指令），此处不再重复计数
+        if (countedSessions.has(session)) return
         const allowed = await checkFrequency(session, true)
         if (!allowed) throw new Error('Blocked')
     })
@@ -188,6 +194,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.middleware(async (session, next) => {
         if (isSystemSession(session)) return next()
         if (!isUserInitiatedNonCommand(session)) return next()
+        // 标记该消息已计数，使后续 command/before-execute 跳过，避免双重消耗
+        countedSessions.add(session)
         const allowed = await checkFrequency(session, false)
         if (!allowed) return
         return next()

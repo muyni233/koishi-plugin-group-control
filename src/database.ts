@@ -30,6 +30,12 @@ export interface SmallGroupWhitelist {
     guildId: string
 }
 
+export interface ApprovedGuild {
+    platform: string
+    guildId: string
+    timestamp: number
+}
+
 export interface SelfLeftGuild {
     platform: string
     guildId: string
@@ -62,6 +68,7 @@ declare module 'koishi' {
         group_bot_status: GroupBotStatus
         small_group_whitelist: SmallGroupWhitelist
         self_left_guild: SelfLeftGuild
+        approved_guild: ApprovedGuild
         pending_invite: PendingInvite
         pending_friend_request: PendingFriendRequest
     }
@@ -106,6 +113,12 @@ export function apply(ctx: Context) {
         timestamp: 'integer',
     }, { primary: ['platform', 'guildId'] })
 
+    ctx.model.extend('approved_guild', {
+        platform: 'string',
+        guildId: 'string',
+        timestamp: 'integer',
+    }, { primary: ['platform', 'guildId'] })
+
     ctx.model.extend('pending_invite', {
         platform: 'string',
         groupId: 'string',
@@ -129,15 +142,15 @@ export function apply(ctx: Context) {
 export const BLACKLIST_PLATFORM = 'onebot';
 
 export async function getBlacklistedGuild(ctx: Context, guildId: string) {
-    return await ctx.model.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    return await ctx.database.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
 }
 
 export async function removeBlacklistedGuild(ctx: Context, guildId: string) {
-    return await ctx.model.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    return await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
 }
 
 export async function createBlacklistedGuild(ctx: Context, guildId: string, reason: string) {
-    return await ctx.model.upsert('blacklisted_guild', [{
+    return await ctx.database.upsert('blacklisted_guild', [{
         platform: BLACKLIST_PLATFORM,
         guildId,
         timestamp: Math.floor(Date.now() / 1000),
@@ -146,16 +159,16 @@ export async function createBlacklistedGuild(ctx: Context, guildId: string, reas
 }
 
 export async function getAllBlacklistedGuilds(ctx: Context) {
-    return await ctx.model.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
+    return await ctx.database.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
 }
 
 export async function clearBlacklistedGuilds(ctx: Context) {
-    return await ctx.model.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
+    return await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
 }
 
 /** 统一写入被踢黑名单行，保证 platform = BLACKLIST_PLATFORM */
 export async function blacklistKicked(ctx: Context, guildId: string) {
-    return await ctx.model.upsert('blacklisted_guild', [{
+    return await ctx.database.upsert('blacklisted_guild', [{
         platform: BLACKLIST_PLATFORM,
         guildId,
         timestamp: Math.floor(Date.now() / 1000),
@@ -167,7 +180,7 @@ export async function blacklistKicked(ctx: Context, guildId: string) {
 
 /** 在主动退群前写入标记，让 guild-removed 能区分「自己退的」和「被踢的」*/
 export async function markSelfLeft(ctx: Context, guildId: string) {
-    await ctx.model.upsert('self_left_guild', [{
+    await ctx.database.upsert('self_left_guild', [{
         platform: BLACKLIST_PLATFORM,
         guildId,
         timestamp: Math.floor(Date.now() / 1000),
@@ -176,36 +189,32 @@ export async function markSelfLeft(ctx: Context, guildId: string) {
 
 /** 消费标记（单次读取后删除），返回是否在 maxAgeSec 内。用于 guild-removed 判断是自己退的 */
 export async function consumeSelfLeft(ctx: Context, guildId: string, maxAgeSec = 120): Promise<boolean> {
-    const [row] = await ctx.model.get('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    const [row] = await ctx.database.get('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
     if (!row) return false;
     // 无论超不超时都清理，防止堆积
-    await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
     return (Math.floor(Date.now() / 1000) - row.timestamp) <= maxAgeSec;
 }
 
 /** 清理标记（退群失败时回滚，或 unban 时清理）*/
 export async function clearSelfLeft(ctx: Context, guildId: string) {
-    await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId });
 }
 
 /** 定期清理过期的主动退群标记（超过 maxAgeSec 秒未消费的）*/
 export async function clearExpiredSelfLeft(ctx: Context, maxAgeSec = 300) {
     const cutoff = Math.floor(Date.now() / 1000) - maxAgeSec;
-    const all = await ctx.model.get('self_left_guild', { platform: BLACKLIST_PLATFORM });
-    const expired = all.filter(r => r.timestamp < cutoff);
-    for (const record of expired) {
-        await ctx.model.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: record.guildId });
-    }
-    return expired.length;
+    // 单次条件批量删除，避免全表拉取 + 逐行删除（N+1）
+    await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, timestamp: { $lt: cutoff } });
 }
 
 export async function getCommandFrequencyRecord(ctx: Context, platform: string, guildId: string) {
-    const records = await ctx.model.get('command_frequency_record', { platform, guildId });
+    const records = await ctx.database.get('command_frequency_record', { platform, guildId });
     return records.length > 0 ? records[0] : null;
 }
 
 export async function updateCommandFrequencyRecord(ctx: Context, platform: string, guildId: string, data: Partial<CommandFrequencyRecord>) {
-    await ctx.model.upsert('command_frequency_record', [{
+    await ctx.database.upsert('command_frequency_record', [{
         platform,
         guildId,
         ...data
@@ -218,87 +227,99 @@ const groupBotStatusCacheKey = (platform: string, guildId: string) => `${platfor
 export async function getGroupBotStatus(ctx: Context, platform: string, guildId: string): Promise<GroupBotStatus | null> {
     const key = groupBotStatusCacheKey(platform, guildId);
     if (groupBotStatusCache.has(key)) return groupBotStatusCache.get(key);
-    const records = await ctx.model.get('group_bot_status', { platform, guildId });
+    const records = await ctx.database.get('group_bot_status', { platform, guildId });
     const status = records.length > 0 ? records[0] : null;
     groupBotStatusCache.set(key, status);
     return status;
 }
 
 export async function setGroupBotStatus(ctx: Context, platform: string, guildId: string, botEnabled: boolean) {
-    await ctx.model.upsert('group_bot_status', [{ platform, guildId, botEnabled }]);
+    await ctx.database.upsert('group_bot_status', [{ platform, guildId, botEnabled }]);
     groupBotStatusCache.set(groupBotStatusCacheKey(platform, guildId), { platform, guildId, botEnabled });
 }
 
 // 小群白名单管理
 export async function isInSmallGroupWhitelist(ctx: Context, guildId: string): Promise<boolean> {
-    const records = await ctx.model.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
+    const records = await ctx.database.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
     return records.length > 0;
 }
 
 export async function addToSmallGroupWhitelist(ctx: Context, guildId: string) {
-    await ctx.model.upsert('small_group_whitelist', [{ platform: BLACKLIST_PLATFORM, guildId }]);
+    await ctx.database.upsert('small_group_whitelist', [{ platform: BLACKLIST_PLATFORM, guildId }]);
 }
 
 export async function removeFromSmallGroupWhitelist(ctx: Context, guildId: string) {
-    await ctx.model.remove('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
+    await ctx.database.remove('small_group_whitelist', { platform: BLACKLIST_PLATFORM, guildId });
 }
 
 export async function getAllSmallGroupWhitelist(ctx: Context) {
-    return await ctx.model.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM });
+    return await ctx.database.get('small_group_whitelist', { platform: BLACKLIST_PLATFORM });
+}
+
+// 已审核/已自动通过的群（持久化）。
+// 用于让审核放行的群永久豁免小群检测（含实时监控）；机器人退群时清除，
+// 这样若被踢后又被「未经审核」拉回，仍会重新接受小群检测。
+export async function markApprovedGuild(ctx: Context, guildId: string) {
+    await ctx.database.upsert('approved_guild', [{
+        platform: BLACKLIST_PLATFORM,
+        guildId,
+        timestamp: Math.floor(Date.now() / 1000),
+    }]);
+}
+
+export async function isApprovedGuild(ctx: Context, guildId: string): Promise<boolean> {
+    const records = await ctx.database.get('approved_guild', { platform: BLACKLIST_PLATFORM, guildId });
+    return records.length > 0;
+}
+
+export async function clearApprovedGuild(ctx: Context, guildId: string) {
+    await ctx.database.remove('approved_guild', { platform: BLACKLIST_PLATFORM, guildId });
 }
 
 // 待处理邀请管理
 export async function getPendingInvite(ctx: Context, groupId: string) {
-    const records = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
+    const records = await ctx.database.get('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
     return records.length > 0 ? records[0] : null;
 }
 
 export async function addPendingInvite(ctx: Context, inviteUser: Omit<PendingInvite, 'platform'>) {
-    await ctx.model.upsert('pending_invite', [{ platform: BLACKLIST_PLATFORM, ...inviteUser }]);
+    await ctx.database.upsert('pending_invite', [{ platform: BLACKLIST_PLATFORM, ...inviteUser }]);
 }
 
 export async function removePendingInvite(ctx: Context, groupId: string) {
-    await ctx.model.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
+    await ctx.database.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId });
 }
 
 export async function getAllPendingInvites(ctx: Context) {
-    return await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
+    return await ctx.database.get('pending_invite', { platform: BLACKLIST_PLATFORM });
 }
 
 export async function clearExpiredPendingInvites(ctx: Context, expireTimeMs: number) {
     const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
-    const all = await ctx.model.get('pending_invite', { platform: BLACKLIST_PLATFORM });
-    const expired = all.filter(r => r.time < cutoff);
-    for (const record of expired) {
-        await ctx.model.remove('pending_invite', { platform: BLACKLIST_PLATFORM, groupId: record.groupId });
-    }
-    return expired.length;
+    // 单次条件批量删除，避免全表拉取 + 逐行删除（N+1）
+    await ctx.database.remove('pending_invite', { platform: BLACKLIST_PLATFORM, time: { $lt: cutoff } });
 }
 
 // 待处理好友申请管理
 export async function getPendingFriendRequest(ctx: Context, platform: string, userId: string) {
-    const records = await ctx.model.get('pending_friend_request', { platform, userId });
+    const records = await ctx.database.get('pending_friend_request', { platform, userId });
     return records.length > 0 ? records[0] : null;
 }
 
 export async function addPendingFriendRequest(ctx: Context, platform: string, data: Omit<PendingFriendRequest, 'platform'>) {
-    await ctx.model.upsert('pending_friend_request', [{ platform, ...data }]);
+    await ctx.database.upsert('pending_friend_request', [{ platform, ...data }]);
 }
 
 export async function removePendingFriendRequest(ctx: Context, platform: string, userId: string) {
-    await ctx.model.remove('pending_friend_request', { platform, userId });
+    await ctx.database.remove('pending_friend_request', { platform, userId });
 }
 
 export async function getAllPendingFriendRequests(ctx: Context, platform: string) {
-    return await ctx.model.get('pending_friend_request', { platform });
+    return await ctx.database.get('pending_friend_request', { platform });
 }
 
 export async function clearExpiredPendingFriendRequests(ctx: Context, platform: string, expireTimeMs: number) {
     const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
-    const all = await ctx.model.get('pending_friend_request', { platform });
-    const expired = all.filter(r => r.time < cutoff);
-    for (const record of expired) {
-        await ctx.model.remove('pending_friend_request', { platform, userId: record.userId });
-    }
-    return expired.length;
+    // 单次条件批量删除，避免全表拉取 + 逐行删除（N+1）
+    await ctx.database.remove('pending_friend_request', { platform, time: { $lt: cutoff } });
 }
