@@ -77,6 +77,10 @@ declare module 'koishi' {
 export const name = 'group-control-database'
 
 export function apply(ctx: Context) {
+    ctx.on('dispose', () => {
+        groupBotStatusCache.clear();
+    });
+
     ctx.model.extend('blacklisted_guild', {
         platform: 'string',
         guildId: 'string',
@@ -221,21 +225,58 @@ export async function updateCommandFrequencyRecord(ctx: Context, platform: strin
     }]);
 }
 
-const groupBotStatusCache = new Map<string, GroupBotStatus | null>();
+const GROUP_BOT_STATUS_CACHE_TTL = 5 * 60 * 1000;
+const GROUP_BOT_STATUS_CACHE_MAX = 1000;
+
+interface GroupBotStatusCacheEntry {
+    value: GroupBotStatus | null
+    expiresAt: number
+}
+
+const groupBotStatusCache = new Map<string, GroupBotStatusCacheEntry>();
 const groupBotStatusCacheKey = (platform: string, guildId: string) => `${platform}:${guildId}`;
+
+function pruneGroupBotStatusCache(now = Date.now()) {
+    for (const [key, entry] of groupBotStatusCache) {
+        if (entry.expiresAt <= now) groupBotStatusCache.delete(key);
+    }
+    while (groupBotStatusCache.size > GROUP_BOT_STATUS_CACHE_MAX) {
+        const oldestKey = groupBotStatusCache.keys().next().value;
+        if (!oldestKey) break;
+        groupBotStatusCache.delete(oldestKey);
+    }
+}
+
+function getCachedGroupBotStatus(key: string): GroupBotStatus | null | undefined {
+    const entry = groupBotStatusCache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+        groupBotStatusCache.delete(key);
+        return undefined;
+    }
+    groupBotStatusCache.delete(key);
+    groupBotStatusCache.set(key, entry);
+    return entry.value;
+}
+
+function setCachedGroupBotStatus(key: string, value: GroupBotStatus | null) {
+    groupBotStatusCache.set(key, { value, expiresAt: Date.now() + GROUP_BOT_STATUS_CACHE_TTL });
+    pruneGroupBotStatusCache();
+}
 
 export async function getGroupBotStatus(ctx: Context, platform: string, guildId: string): Promise<GroupBotStatus | null> {
     const key = groupBotStatusCacheKey(platform, guildId);
-    if (groupBotStatusCache.has(key)) return groupBotStatusCache.get(key);
+    const cached = getCachedGroupBotStatus(key);
+    if (cached !== undefined) return cached;
     const records = await ctx.database.get('group_bot_status', { platform, guildId });
     const status = records.length > 0 ? records[0] : null;
-    groupBotStatusCache.set(key, status);
+    setCachedGroupBotStatus(key, status);
     return status;
 }
 
 export async function setGroupBotStatus(ctx: Context, platform: string, guildId: string, botEnabled: boolean) {
     await ctx.database.upsert('group_bot_status', [{ platform, guildId, botEnabled }]);
-    groupBotStatusCache.set(groupBotStatusCacheKey(platform, guildId), { platform, guildId, botEnabled });
+    setCachedGroupBotStatus(groupBotStatusCacheKey(platform, guildId), { platform, guildId, botEnabled });
 }
 
 // 小群白名单管理

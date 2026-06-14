@@ -9,11 +9,21 @@ import {
 
 export const name = 'group-control-invite'
 
+async function handleInviteRequest(bot: any, flag: string, approve: boolean, comment = '') {
+    if (typeof bot.handleGuildRequest === 'function') {
+        try {
+            await bot.handleGuildRequest(flag, approve, comment);
+            return;
+        } catch { }
+    }
+    await bot.internal.setGroupAddRequest(flag, 'invite', approve, comment);
+}
+
 export function apply(ctx: Context, config: Config) {
     if (!config.invite.enabled) return;
 
     // 定期清理超时的邀请（比如每天一次，或者按需，这里每小时检查一次）
-    setInterval(async () => {
+    ctx.setInterval(async () => {
         const expireMs = config.invite.inviteExpireDays * 24 * 60 * 60 * 1000;
         try {
             await clearExpiredPendingInvites(ctx, expireMs);
@@ -56,7 +66,7 @@ export function apply(ctx: Context, config: Config) {
             if (bl.length > 0) {
                 // 尝试拒绝邀请（flag 有可能已失效，做 best-effort）
                 try {
-                    await session.bot.internal.setGroupAddRequest(flag, 'invite', false, '该群已被机器人拉黑');
+                    await handleInviteRequest(session.bot, flag, false, '该群已被机器人拉黑');
                 } catch (e) {
                     ctx.logger('group-control-invite').warn('拒绝黑名单群邀请失败 (flag 可能已失效):', e);
                 }
@@ -107,7 +117,7 @@ export function apply(ctx: Context, config: Config) {
         // 自动同意逻辑（无论是否配置管理员均可生效）
         if (config.invite.autoApprove) {
             try {
-                await session.bot.internal.setGroupAddRequest(flag, 'invite', true, '');
+                await handleInviteRequest(session.bot, flag, true);
                 // 记录已审核通过（持久化，永久豁免小群检测，退群时清除）
                 await markApprovedGuild(ctx, rawGroupId);
                 if (config.invite.showDetailedLog) {
@@ -241,7 +251,7 @@ export function apply(ctx: Context, config: Config) {
             }
 
             try {
-                await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', true, '');
+                await handleInviteRequest(session.bot, inviteData.flag, true);
 
                 // 记录已审核通过，防止小群自动退群
                 await markApprovedGuild(ctx, groupId);
@@ -279,7 +289,7 @@ export function apply(ctx: Context, config: Config) {
             }
 
             try {
-                await session.bot.internal.setGroupAddRequest(inviteData.flag, 'invite', false, '已拒绝');
+                await handleInviteRequest(session.bot, inviteData.flag, false, '已拒绝');
 
                 // 通知邀请者
                 try {

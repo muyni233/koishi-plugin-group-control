@@ -5,6 +5,7 @@ import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequen
 export const name = 'group-control-frequency'
 
 const PRIVATE_GUILD_PREFIX = '__private__:'
+const frequencyLocks = new Map<string, Promise<void>>()
 
 function isBlocked(record: CommandFrequencyRecord | null): boolean {
     if (!record || !record.blockExpiryTime) return false
@@ -18,6 +19,22 @@ function calcBlockDur(baseDur: number, expBase: number, blockCount: number): num
 
 function makeEmptyRecord(platform: string, guildId: string, now: number): CommandFrequencyRecord {
     return { platform, guildId, commandCount: 1, lastCommandTime: now, warningSent: false, blockExpiryTime: 0, firstWarningTime: 0, blockCount: 0, lastBlockNotifyTime: 0 }
+}
+
+async function withFrequencyLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = frequencyLocks.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const current = new Promise<void>(resolve => { release = resolve })
+    const tail = previous.then(() => current, () => current)
+    frequencyLocks.set(key, tail)
+
+    await previous.catch(() => { })
+    try {
+        return await task()
+    } finally {
+        release()
+        if (frequencyLocks.get(key) === tail) frequencyLocks.delete(key)
+    }
 }
 
 type TriggerResult =
@@ -73,6 +90,13 @@ async function handleTrigger(
             await updateCommandFrequencyRecord(ctx, platform, guildId, record)
             return { result: 'blocked-silent' }
         }
+    }
+
+    if (warnDelay > 0 && record.warningSent && record.firstWarningTime > 0 && now - record.firstWarningTime >= warnDelay) {
+        record.warningSent = false
+        record.firstWarningTime = 0
+        record.commandCount = 1
+        record.lastCommandTime = now
     }
 
     // over limit
@@ -132,10 +156,11 @@ export function apply(ctx: Context, config: Config) {
             if (freq.privateWhitelist?.includes(session.userId)) return true
 
             const guildId = PRIVATE_GUILD_PREFIX + session.userId
-            const r = await handleTrigger(ctx, platform, guildId,
-                freq.privateLimit, freq.privateWindow, freq.privateWarnDelay,
-                freq.privateBlockDur, freq.blockExpBase, freq.blockExpWindow,
-                freq.blockNotifyCooldown)
+            const r = await withFrequencyLock(`${platform}:${guildId}`, () =>
+                handleTrigger(ctx, platform, guildId,
+                    freq.privateLimit, freq.privateWindow, freq.privateWarnDelay,
+                    freq.privateBlockDur, freq.blockExpBase, freq.blockExpWindow,
+                    freq.blockNotifyCooldown))
 
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
@@ -157,10 +182,11 @@ export function apply(ctx: Context, config: Config) {
             if (freq.whitelist?.includes(session.guildId)) return true
 
             const { guildId } = session
-            const r = await handleTrigger(ctx, platform, guildId,
-                freq.limit, freq.window, freq.warnDelay,
-                freq.blockDur, freq.blockExpBase, freq.blockExpWindow,
-                freq.blockNotifyCooldown)
+            const r = await withFrequencyLock(`${platform}:${guildId}`, () =>
+                handleTrigger(ctx, platform, guildId,
+                    freq.limit, freq.window, freq.warnDelay,
+                    freq.blockDur, freq.blockExpBase, freq.blockExpWindow,
+                    freq.blockNotifyCooldown))
 
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
@@ -187,7 +213,7 @@ export function apply(ctx: Context, config: Config) {
         // 若该消息已在中间件阶段计数（私聊指令 / @bot 指令），此处不再重复计数
         if (countedSessions.has(session)) return
         const allowed = await checkFrequency(session, true)
-        if (!allowed) throw new Error('Blocked')
+        if (!allowed) return ''
     })
 
     // intercept non-command user messages (direct chat / @ bot)

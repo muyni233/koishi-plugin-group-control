@@ -5,18 +5,62 @@ import { hasGuildPermission, ADMIN_COMMANDS } from '../utils'
 
 export const name = 'group-control-switch'
 
+function normalizeCommandName(name: string, prefixes: string[] = []): string {
+    let source = name.trim();
+    for (const prefix of prefixes.filter(Boolean).sort((a, b) => b.length - a.length)) {
+        if (source.startsWith(prefix)) {
+            source = source.slice(prefix.length);
+            break;
+        }
+    }
+    return source.replace(/^[/.!！。]+/, '').toLowerCase().replace(/_/g, '-');
+}
+
+function getCommandNames(command: any): string[] {
+    const names = new Set<string>();
+    if (command?.name) names.add(normalizeCommandName(command.name));
+    if (command?.displayName) names.add(normalizeCommandName(command.displayName));
+    for (const alias of Object.keys(command?._aliases ?? {})) {
+        names.add(normalizeCommandName(alias));
+    }
+    return [...names];
+}
+
+function isAdminCommand(command: any): boolean {
+    return getCommandNames(command).some(commandName => ADMIN_COMMANDS.has(commandName));
+}
+
+function getCommandPrefixes(ctx: Context, session: any): string[] {
+    const configured = session.resolve?.(ctx.root.config.prefix as any) ?? ctx.root.config.prefix;
+    const prefixes = Array.isArray(configured) ? configured : [configured || ''];
+    return [...prefixes, '/', '.', '!', '！', '。'];
+}
+
+function stripLeadingBotMentions(content: string): string {
+    return content
+        .replace(/^(?:\s*<at\b[^>]*(?:\/>|>\s*<\/at>))+\s*/i, '')
+        .replace(/^(?:\s*\[CQ:at,[^\]]+\])+\s*/i, '');
+}
+
+function getMessageCommandName(ctx: Context, session: any): string | null {
+    const strippedContent = session.stripped?.content?.trim();
+    const content = stripLeadingBotMentions(strippedContent ? session.stripped.content : session.content ?? '');
+    const firstWord = content.match(/^\s*(\S+)/)?.[1];
+    return firstWord ? normalizeCommandName(firstWord, getCommandPrefixes(ctx, session)) : null;
+}
+
 export function apply(ctx: Context, config: Config) {
     // ======== 自定义指令权限保护 ========
     // 无论 botSwitch 是否启用，只要配置了 protectedCommands 就生效
     if (config.permission.protectedCommands?.length > 0) {
-        const protectedSet = new Set(config.permission.protectedCommands);
+        const protectedSet = new Set(config.permission.protectedCommands.map(commandName => normalizeCommandName(commandName)));
 
         ctx.on('command/before-execute', async (argv) => {
             const session = argv.session;
             if (!session.guildId) return; // 仅限群聊
 
-            const commandName = argv.command.name;
-            if (!protectedSet.has(commandName)) return; // 不在保护列表中
+            const commandNames = getCommandNames(argv.command);
+            if (!commandNames.some(commandName => protectedSet.has(commandName))) return; // 不在保护列表中
 
             const hasPerm = await hasGuildPermission(session, config);
             if (!hasPerm) {
@@ -67,7 +111,7 @@ export function apply(ctx: Context, config: Config) {
         if (!session.guildId) return; // 仅限群聊
 
         // 允许管理指令
-        if (ADMIN_COMMANDS.has(argv.command.name)) {
+        if (isAdminCommand(argv.command)) {
             return;
         }
 
@@ -98,10 +142,11 @@ export function apply(ctx: Context, config: Config) {
         if (isBotEnabled) {
             return next(); // 如果已开启，则放行
         }
-        // 放行管理指令：从消息文本中提取首个词与 ADMIN_COMMANDS 比对
-        const content = session.stripped?.content ?? session.content ?? '';
-        const firstWord = content.match(/^\s*[/.!！。]*(\S+)/)?.[1];
-        if (firstWord && ADMIN_COMMANDS.has(firstWord)) {
+        // 放行管理指令
+        const commandName = session.argv?.command && isAdminCommand(session.argv.command)
+            ? session.argv.command.name
+            : getMessageCommandName(ctx, session);
+        if (commandName && ADMIN_COMMANDS.has(normalizeCommandName(commandName))) {
             return next();
         }
         // 在已关闭状态下：

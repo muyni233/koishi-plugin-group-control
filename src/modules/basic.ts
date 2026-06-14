@@ -30,6 +30,21 @@ interface SmallGroupResult {
     groupName: string;
 }
 
+async function getGroupMemberList(bot: any, guildId: string): Promise<any[]> {
+    try {
+        const raw = await bot.internal?.getGroupMemberList?.(parseInt(guildId));
+        const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
+        if (list.length > 0) return list;
+    } catch { }
+
+    try {
+        const raw = await bot.getGuildMemberList?.(guildId);
+        return Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
+    } catch { }
+
+    return [];
+}
+
 export function apply(ctx: Context, config: Config) {
     // 使用 Map 记录主动退群的时间戳，保留一段时间防止 guild-removed 多次触发
     const quittingGuilds = new Map<string, number>();
@@ -46,7 +61,7 @@ export function apply(ctx: Context, config: Config) {
     const REALTIME_DEBOUNCE_MS = 1500;     // 实时复检前的防抖（合并瞬时连续退群）
 
     // 定期清理过期的记录
-    setInterval(() => {
+    ctx.setInterval(() => {
         const now = Date.now();
         for (const [key, time] of quittingGuilds) {
             if (now - time > QUITTING_EXPIRE_MS) quittingGuilds.delete(key);
@@ -64,7 +79,7 @@ export function apply(ctx: Context, config: Config) {
     }, 30 * 1000);
 
     // 定期清理过期的持久化主动退群标记（guild-removed 未触发时的兜底）
-    setInterval(async () => {
+    ctx.setInterval(async () => {
         try {
             await clearExpiredSelfLeft(ctx);  // 默认 5 分钟过期
         } catch { /* 静默忽略清理失败 */ }
@@ -116,11 +131,7 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // —— 步骤3：模糊区间（或原始人数未知），拉一次成员列表统计 ——
-        let list: any[] = [];
-        try {
-            const raw = await bot.internal?.getGroupMemberList?.(parseInt(guildId));
-            list = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
-        } catch { }
+        const list = await getGroupMemberList(bot, guildId);
 
         if (list.length === 0) {
             // 无法获取列表：用原始人数兜底，仍拿不到则放弃
@@ -137,8 +148,8 @@ export function apply(ctx: Context, config: Config) {
         const botsNeeded = N - threshold;
         let bots = 0;
         for (const m of list) {
-            const uid = String(m?.user_id ?? m?.userId ?? '');
-            if (m?.is_robot === true || (selfId && uid === selfId)) {
+            const uid = String(m?.user_id ?? m?.userId ?? m?.user?.id ?? '');
+            if (m?.is_robot === true || m?.user?.isBot === true || (selfId && uid === selfId)) {
                 bots++;
                 if (bots >= botsNeeded) {
                     // 真人数 = N - bots ≤ threshold，判定为小群，无需继续遍历
@@ -216,7 +227,7 @@ export function apply(ctx: Context, config: Config) {
                 // 跳过小群检测
             } else {
                 const delay = config.basic.smallGroupCheckDelay || 3000;
-                setTimeout(async () => {
+                ctx.setTimeout(async () => {
                     try {
                         const res = await evaluateSmallGroup(session.bot, guildId);
                         let groupName = res.groupName;
@@ -272,7 +283,7 @@ export function apply(ctx: Context, config: Config) {
             if (await isApprovedGuild(ctx, guildId)) return;
 
             // 防抖：合并瞬时连续退群，稍后再复检
-            setTimeout(async () => {
+            ctx.setTimeout(async () => {
                 try {
                     if (quittingGuilds.has(`${BLACKLIST_PLATFORM}:${guildId}`)) return;
                     const res = await evaluateSmallGroup(session.bot, guildId);

@@ -45,23 +45,105 @@ export function isGlobalAdmin(session: Session, config: Config): boolean {
     return config.admin.adminQQs?.includes(session.userId) ?? false;
 }
 
+const GUILD_ADMIN_CACHE_TTL = 30 * 1000;
+const GUILD_ADMIN_NEGATIVE_CACHE_TTL = 5 * 1000;
+const GUILD_ADMIN_CACHE_MAX = 1000;
+
+interface GuildAdminCacheEntry {
+    value: boolean
+    expiresAt: number
+}
+
+const guildAdminCache = new Map<string, GuildAdminCacheEntry>();
+
+function guildAdminCacheKey(session: Session): string | null {
+    if (!session.guildId || !session.userId) return null;
+    return `${session.platform}:${session.guildId}:${session.userId}`;
+}
+
+function pruneGuildAdminCache(now = Date.now()) {
+    for (const [key, entry] of guildAdminCache) {
+        if (entry.expiresAt <= now) guildAdminCache.delete(key);
+    }
+    while (guildAdminCache.size > GUILD_ADMIN_CACHE_MAX) {
+        const oldestKey = guildAdminCache.keys().next().value;
+        if (!oldestKey) break;
+        guildAdminCache.delete(oldestKey);
+    }
+}
+
+function getCachedGuildAdmin(session: Session): boolean | undefined {
+    const key = guildAdminCacheKey(session);
+    if (!key) return undefined;
+    const entry = guildAdminCache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+        guildAdminCache.delete(key);
+        return undefined;
+    }
+    guildAdminCache.delete(key);
+    guildAdminCache.set(key, entry);
+    return entry.value;
+}
+
+function setCachedGuildAdmin(session: Session, value: boolean) {
+    const key = guildAdminCacheKey(session);
+    if (!key) return;
+    const ttl = value ? GUILD_ADMIN_CACHE_TTL : GUILD_ADMIN_NEGATIVE_CACHE_TTL;
+    guildAdminCache.set(key, { value, expiresAt: Date.now() + ttl });
+    pruneGuildAdminCache();
+}
+
+function hasAdminRole(member: any): boolean {
+    if (!member) return false;
+
+    const data = member.data ?? member.member ?? member.sender ?? member;
+    const role = data.role ?? data.memberRole ?? data.permissions;
+    if (role === 'admin' || role === 'owner' || role === 'administrator') return true;
+
+    const roles = data.roles ?? data.roleIds;
+    if (Array.isArray(roles)) {
+        return roles.some((role: string) => role === 'admin' || role === 'owner' || role === 'administrator');
+    }
+
+    return false;
+}
+
+async function getOneBotGroupMemberInfo(session: Session) {
+    const guildId = Number(parseGuildId(session.guildId) ?? session.guildId);
+    const userId = Number(parseGuildId(session.userId) ?? session.userId);
+    if (!Number.isFinite(guildId) || !Number.isFinite(userId)) return null;
+    return await (session.bot as any).internal?.getGroupMemberInfo?.(guildId, userId, true);
+}
+
 /** 是否为群管理员或群主（仅 builtin 模式使用） */
 async function isGuildAdmin(session: Session): Promise<boolean> {
+    const event = session.event as any;
+    const raw = event?._data ?? (session as any).original ?? (session as any).onebot;
+    if (hasAdminRole(event?.member) || hasAdminRole(raw?.sender)) {
+        setCachedGuildAdmin(session, true);
+        return true;
+    }
+
+    const cached = getCachedGuildAdmin(session);
+    if (cached !== undefined) return cached;
+
+    let result = false;
+
     try {
         const member = await session.bot.getGuildMember(session.guildId, session.userId);
-        const role = (member as any)?.role;
-        if (role === 'admin' || role === 'owner') return true;
-        const roles = (member as any)?.roles;
-        if (Array.isArray(roles)) return roles.some((r: string) => r === 'admin' || r === 'owner');
-    } catch {
+        if (hasAdminRole(member)) result = true;
+    } catch { }
+
+    if (!result) {
         try {
-            const info = await (session.bot as any).internal?.getGroupMemberInfo?.(
-                parseInt(session.guildId), parseInt(session.userId)
-            );
-            if (info?.role === 'admin' || info?.role === 'owner') return true;
+            const info = await getOneBotGroupMemberInfo(session);
+            if (hasAdminRole(info)) result = true;
         } catch { }
     }
-    return false;
+
+    setCachedGuildAdmin(session, result);
+    return result;
 }
 
 /**

@@ -12,7 +12,7 @@ export function apply(ctx: Context, config: Config) {
     if (!config.friend.enabled) return
 
     // 定期清理过期申请
-    setInterval(async () => {
+    ctx.setInterval(async () => {
         const expireMs = config.friend.requestExpireDays * 24 * 60 * 60 * 1000
         try {
             // 遍历所有 bot 的 platform
