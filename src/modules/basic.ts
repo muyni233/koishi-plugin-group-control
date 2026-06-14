@@ -76,6 +76,15 @@ export function apply(ctx: Context, config: Config) {
     const KICK_DEDUP_MS = 60 * 1000;       // 60秒内同一群的踢出不重复处理
     const ADD_DEDUP_MS = 10 * 1000;        // 10秒内同一群的 guild-added 视为重放
     const REALTIME_DEBOUNCE_MS = 1500;     // 实时复检前的防抖（合并瞬时连续退群）
+    const WELCOME_RETRY_DELAYS = [1000, 3000, 7000];
+
+    function isRecent(map: Map<string, number>, key: string, ttl: number): boolean {
+        const time = map.get(key);
+        if (!time) return false;
+        if (Date.now() - time <= ttl) return true;
+        map.delete(key);
+        return false;
+    }
 
     // 定期清理过期的记录
     ctx.setInterval(() => {
@@ -208,6 +217,36 @@ export function apply(ctx: Context, config: Config) {
         }
     }
 
+    function sendWelcomeMessage(bot: any, platform: string, guildId: string, message: string, shouldStop: () => boolean) {
+        const logger = ctx.logger('group-control-basic');
+
+        const attempt = async (attemptIndex: number) => {
+            if (shouldStop()) return;
+
+            try {
+                await bot.sendMessage(guildId, message, platform);
+                if (attemptIndex > 0) {
+                    logger.info(`[guild-added] 欢迎消息重试成功 guildId=${guildId}, attempt=${attemptIndex + 1}`);
+                }
+            } catch (error) {
+                if (shouldStop()) return;
+
+                const retryDelay = WELCOME_RETRY_DELAYS[attemptIndex];
+                if (retryDelay == null) {
+                    logger.warn(`[guild-added] 欢迎消息发送失败 guildId=${guildId}, attempts=${attemptIndex + 1}`, error);
+                    return;
+                }
+
+                logger.warn(`[guild-added] 欢迎消息发送失败，${retryDelay}ms 后重试 guildId=${guildId}, attempt=${attemptIndex + 1}`, error);
+                ctx.setTimeout(() => {
+                    void attempt(attemptIndex + 1);
+                }, retryDelay);
+            }
+        };
+
+        void attempt(0);
+    }
+
     ctx.on('guild-added', async (session) => {
         const { platform } = session;
         const guildId = parseGuildId(session.guildId);
@@ -217,7 +256,7 @@ export function apply(ctx: Context, config: Config) {
 
         // guild-added 去重：防止 OneBot 重连/重放导致重复欢迎与重复小群检测
         const addKey = makeGuildKey(platform, selfId, guildId);
-        if (processedAdds.has(addKey)) {
+        if (isRecent(processedAdds, addKey, ADD_DEDUP_MS)) {
             ctx.logger('group-control-basic').info(`[guild-added] 忽略重复事件 guildId=${guildId}`)
             return;
         }
@@ -279,7 +318,13 @@ export function apply(ctx: Context, config: Config) {
 
         // 发送欢迎消息
         if (config.basic.welcomeMessage) {
-            try { await session.bot.sendMessage(guildId, config.basic.welcomeMessage, platform); } catch (e) { }
+            sendWelcomeMessage(
+                session.bot,
+                platform,
+                guildId,
+                config.basic.welcomeMessage,
+                () => isRecent(quittingGuilds, addKey, QUITTING_EXPIRE_MS),
+            );
         }
     });
 
@@ -362,7 +407,7 @@ export function apply(ctx: Context, config: Config) {
         if (!subType && ageSec > 60) return;
 
         // 5) 进程内去重（同名群 60s 内只处理一次）
-        if (processedKicks.has(dedupKey)) return;
+        if (isRecent(processedKicks, dedupKey, KICK_DEDUP_MS)) return;
         processedKicks.set(dedupKey, Date.now());
 
         // 6) 持久化幂等：已经被自动踢出拉黑的（reason === 'kicked'）不再重复通知
