@@ -7,6 +7,7 @@ import * as frequency from './modules/frequency'
 import * as commands from './modules/commands'
 import * as botSwitch from './modules/switch'
 import * as friend from './modules/friend'
+import { clearGuildAdminCache } from './utils'
 
 export * from './config'
 
@@ -17,6 +18,10 @@ export const inject = ['database']
 
 
 export function apply(ctx: Context, config: Config) {
+  ctx.on('dispose', () => {
+    clearGuildAdminCache()
+  })
+
   ctx.plugin(database)
   ctx.plugin(basic, config)
   ctx.plugin(invite, config)

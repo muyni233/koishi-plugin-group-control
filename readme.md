@@ -4,7 +4,7 @@
 
 Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
-> 使用 Qwen3-Coder & Gemini-3.1-Pro-Preview & Claude Sonnet/Opus 4.6 协助完成
+> 使用 AI Agent 协助完成
 
 ---
 
@@ -189,9 +189,9 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `gc.approve <群号>` | 同意加入指定群 |
 | `gc.reject <群号>` | 拒绝加入指定群 |
 | `gc.pending` | 查看待处理的群聊邀请列表 |
-| `gc.fa <QQ号>` | 同意好友申请 |
-| `gc.fr <QQ号>` | 拒绝好友申请 |
-| `gc.fp` | 查看待处理的好友申请列表 |
+| `gc.friend-approve <QQ号>` | 同意好友申请（兼容别名：`gc.fa`） |
+| `gc.friend-reject <QQ号>` | 拒绝好友申请（兼容别名：`gc.fr`） |
+| `gc.friend-pending` | 查看待处理的好友申请列表（兼容别名：`gc.fp`） |
 
 ### 群聊管理
 

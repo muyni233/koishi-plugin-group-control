@@ -1,6 +1,7 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequencyRecord } from '../database'
+import { parseGuildId } from '../utils'
 
 export const name = 'group-control-frequency'
 
@@ -142,6 +143,8 @@ function isUserInitiatedNonCommand(session: Session): boolean {
 export function apply(ctx: Context, config: Config) {
     const freq = config.frequency
     if (!freq.enabled && !freq.privateEnabled) return
+    const groupWhitelist = new Set((freq.whitelist ?? []).map(id => parseGuildId(id) ?? id))
+    const privateWhitelist = new Set((freq.privateWhitelist ?? []).map(id => parseGuildId(id) ?? id))
 
     // 记录本条消息是否已被中间件计数，避免同一条消息（私聊指令 / @bot 指令）
     // 在中间件和 command/before-execute 中被重复计数（双重消耗频率额度）
@@ -153,9 +156,10 @@ export function apply(ctx: Context, config: Config) {
 
         if (isPrivate) {
             if (!freq.privateEnabled) return true
-            if (freq.privateWhitelist?.includes(session.userId)) return true
+            const userId = parseGuildId(session.userId) ?? session.userId
+            if (privateWhitelist.has(userId)) return true
 
-            const guildId = PRIVATE_GUILD_PREFIX + session.userId
+            const guildId = PRIVATE_GUILD_PREFIX + userId
             const r = await withFrequencyLock(`${platform}:${guildId}`, () =>
                 handleTrigger(ctx, platform, guildId,
                     freq.privateLimit, freq.privateWindow, freq.privateWarnDelay,
@@ -179,9 +183,10 @@ export function apply(ctx: Context, config: Config) {
             return false
         } else {
             if (!freq.enabled) return true
-            if (freq.whitelist?.includes(session.guildId)) return true
+            const normalizedGuildId = parseGuildId(session.guildId) ?? session.guildId
+            if (groupWhitelist.has(normalizedGuildId)) return true
 
-            const { guildId } = session
+            const guildId = normalizedGuildId
             const r = await withFrequencyLock(`${platform}:${guildId}`, () =>
                 handleTrigger(ctx, platform, guildId,
                     freq.limit, freq.window, freq.warnDelay,

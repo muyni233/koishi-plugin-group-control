@@ -1,15 +1,31 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGuildPermission } from '../utils'
-import { isInSmallGroupWhitelist, getPendingInvite, removePendingInvite, markSelfLeft, consumeSelfLeft, clearSelfLeft, clearExpiredSelfLeft, blacklistKicked, createBlacklistedGuild, isApprovedGuild, clearApprovedGuild, BLACKLIST_PLATFORM } from '../database'
+import { notifyAdmins, hasGuildPermission, parseGuildId, toOneBotNumber, getAdminCommandOptions } from '../utils'
+import { isInSmallGroupWhitelist, getPendingInvite, removePendingInvite, markSelfLeft, consumeSelfLeft, clearSelfLeft, clearExpiredSelfLeft, blacklistKicked, createBlacklistedGuild, isApprovedGuild, clearApprovedGuild, getBlacklistedGuild, BLACKLIST_PLATFORM } from '../database'
 
 export const name = 'group-control-basic'
+
+function getBotSelfId(bot: any): string {
+    const raw = String(bot?.selfId ?? bot?.userId ?? '');
+    return parseGuildId(raw) ?? raw;
+}
+
+function makeGuildKey(platform: string, selfId: string, guildId: string): string {
+    return `${platform}:${selfId}:${guildId}`;
+}
+
+async function leaveGroup(bot: any, guildId: string) {
+    const groupId = toOneBotNumber(guildId);
+    if (groupId == null) throw new Error(`无效群号: ${guildId}`);
+    await bot.internal.setGroupLeave(groupId);
+}
 
 /** 尝试获取群名称，失败时返回 '未知' */
 async function getGroupName(bot: any, guildId: string): Promise<string> {
     // 方式1: OneBot 内部 API
     try {
-        const info = await bot.internal?.getGroupInfo?.(parseInt(guildId));
+        const groupId = toOneBotNumber(guildId);
+        const info = groupId == null ? null : await bot.internal?.getGroupInfo?.(groupId);
         const data = info?.data ?? info;
         if (data?.group_name) return data.group_name;
     } catch { }
@@ -32,7 +48,8 @@ interface SmallGroupResult {
 
 async function getGroupMemberList(bot: any, guildId: string): Promise<any[]> {
     try {
-        const raw = await bot.internal?.getGroupMemberList?.(parseInt(guildId));
+        const groupId = toOneBotNumber(guildId);
+        const raw = groupId == null ? null : await bot.internal?.getGroupMemberList?.(groupId);
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
         if (list.length > 0) return list;
     } catch { }
@@ -103,7 +120,8 @@ export function apply(ctx: Context, config: Config) {
         let total = 0;
         let groupName = '未知';
         try {
-            const info = await bot.internal?.getGroupInfo?.(parseInt(guildId));
+            const groupId = toOneBotNumber(guildId);
+            const info = groupId == null ? null : await bot.internal?.getGroupInfo?.(groupId);
             const data = info?.data ?? info;
             total = Number(data?.member_count) || 0;
             if (data?.group_name) groupName = data.group_name;
@@ -144,11 +162,11 @@ export function apply(ctx: Context, config: Config) {
         if (N <= threshold) return { decision: 'quit', count: N, groupName };
 
         // 统计机器人：当 bots ≥ N - threshold 时，真人数必 ≤ 阈值，可提前结束
-        const selfId = String(bot.selfId ?? '');
+        const selfId = getBotSelfId(bot);
         const botsNeeded = N - threshold;
         let bots = 0;
         for (const m of list) {
-            const uid = String(m?.user_id ?? m?.userId ?? m?.user?.id ?? '');
+            const uid = parseGuildId(String(m?.user_id ?? m?.userId ?? m?.user?.id ?? '')) ?? '';
             if (m?.is_robot === true || m?.user?.isBot === true || (selfId && uid === selfId)) {
                 bots++;
                 if (bots >= botsNeeded) {
@@ -163,6 +181,8 @@ export function apply(ctx: Context, config: Config) {
 
     /** 执行小群退群：群内提示 + 通知管理员 + 标记主动退群 + 退群（失败回滚） */
     async function performSmallGroupQuit(bot: any, platform: string, guildId: string, groupName: string, memberCount: number) {
+        const selfId = getBotSelfId(bot);
+        const dedupKey = makeGuildKey(platform, selfId, guildId);
         const threshold = config.basic.smallGroupThreshold;
         const quitMsg = config.basic.smallGroupQuitMessage
             .replaceAll('{memberCount}', memberCount.toString())
@@ -177,23 +197,26 @@ export function apply(ctx: Context, config: Config) {
         }
 
         // 标记为主动退出，避免触发被踢拉黑逻辑
-        quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
-        await markSelfLeft(ctx, guildId);
+        quittingGuilds.set(dedupKey, Date.now());
+        await markSelfLeft(ctx, guildId, selfId);
         try {
-            await bot.internal.setGroupLeave(parseInt(guildId));
+            await leaveGroup(bot, guildId);
         } catch (e) {
             console.error(`小群自动退群失败 (群号: ${guildId}):`, e);
-            quittingGuilds.delete(`${BLACKLIST_PLATFORM}:${guildId}`);
-            await clearSelfLeft(ctx, guildId);
+            quittingGuilds.delete(dedupKey);
+            await clearSelfLeft(ctx, guildId, selfId);
         }
     }
 
     ctx.on('guild-added', async (session) => {
-        const { guildId, platform } = session;
+        const { platform } = session;
+        const guildId = parseGuildId(session.guildId);
+        if (!guildId) return;
+        const selfId = getBotSelfId(session.bot);
         ctx.logger('group-control-basic').info(`[guild-added] 触发！guildId=${guildId}, platform=${platform}`)
 
         // guild-added 去重：防止 OneBot 重连/重放导致重复欢迎与重复小群检测
-        const addKey = `${BLACKLIST_PLATFORM}:${guildId}`;
+        const addKey = makeGuildKey(platform, selfId, guildId);
         if (processedAdds.has(addKey)) {
             ctx.logger('group-control-basic').info(`[guild-added] 忽略重复事件 guildId=${guildId}`)
             return;
@@ -202,12 +225,12 @@ export function apply(ctx: Context, config: Config) {
 
         // 检查黑名单
         if (config.basic.enableBlacklist) {
-            const [blacklisted] = await ctx.database.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
+            const [blacklisted] = await getBlacklistedGuild(ctx, guildId);
             if (blacklisted) {
                 try { await session.bot.sendMessage(guildId, config.basic.blacklistMessage, platform); } catch (e) { }
-                quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
-                await markSelfLeft(ctx, guildId);  // 持久标记：防止重启/HMR后 guild-removed 误判为被踢
-                try { await session.bot.internal.setGroupLeave(parseInt(guildId)); } catch (e) { }
+                quittingGuilds.set(addKey, Date.now());
+                await markSelfLeft(ctx, guildId, selfId);  // 持久标记：防止重启/HMR后 guild-removed 误判为被踢
+                try { await leaveGroup(session.bot, guildId); } catch (e) { }
                 return;
             }
         }
@@ -216,12 +239,12 @@ export function apply(ctx: Context, config: Config) {
         if (config.basic.smallGroupAutoQuit) {
             // 管理员已审核通过的群或白名单内的群不受小群自动退群限制
             const inWhitelist = await isInSmallGroupWhitelist(ctx, guildId);
-            const wasApproved = await isApprovedGuild(ctx, guildId);
+            const wasApproved = await isApprovedGuild(ctx, guildId, selfId);
 
             // 检查是否有待处理的邀请记录（管理员手动通过邀请时也会有记录）
-            const pendingInvite = await getPendingInvite(ctx, guildId);
+            const pendingInvite = await getPendingInvite(ctx, platform, guildId, selfId);
             const hadPendingInvite = !!pendingInvite;
-            if (hadPendingInvite) await removePendingInvite(ctx, guildId); // 已入群，清理记录
+            if (hadPendingInvite) await removePendingInvite(ctx, platform, guildId, selfId); // 已入群，清理记录
 
             if (inWhitelist || wasApproved || hadPendingInvite) {
                 // 跳过小群检测
@@ -265,27 +288,30 @@ export function apply(ctx: Context, config: Config) {
     // 配合 per-群冷却 + 防抖，仅在群真正缩小时才发起一次轻量复检。
     if (config.basic.smallGroupAutoQuit && config.basic.smallGroupRealtimeMonitor) {
         ctx.on('guild-member-removed', async (session) => {
-            const { guildId, platform } = session;
+            const { platform } = session;
+            const guildId = parseGuildId(session.guildId);
             if (!guildId) return;
+            const selfId = getBotSelfId(session.bot);
+            const dedupKey = makeGuildKey(platform, selfId, guildId);
             // 机器人自身退群由 guild-removed 处理，忽略
-            if (String(session.userId) === String(session.bot.selfId)) return;
+            if (parseGuildId(session.userId) === selfId) return;
             // 已在退群流程中的群跳过
-            if (quittingGuilds.has(`${BLACKLIST_PLATFORM}:${guildId}`)) return;
+            if (quittingGuilds.has(dedupKey)) return;
 
             // 冷却限流（内存判断，先于数据库查询，避免频繁查库）：同一群两次复检的最小间隔
             const cooldown = (config.basic.smallGroupRecheckCooldown || 60) * 1000;
             const now = Date.now();
-            if (now - (realtimeLastCheck.get(guildId) || 0) < cooldown) return;
-            realtimeLastCheck.set(guildId, now);
+            if (now - (realtimeLastCheck.get(dedupKey) || 0) < cooldown) return;
+            realtimeLastCheck.set(dedupKey, now);
 
             // 白名单群、已审核通过的群永久豁免实时监控（仅监控未经审核被拉入的群）
             if (await isInSmallGroupWhitelist(ctx, guildId)) return;
-            if (await isApprovedGuild(ctx, guildId)) return;
+            if (await isApprovedGuild(ctx, guildId, selfId)) return;
 
             // 防抖：合并瞬时连续退群，稍后再复检
             ctx.setTimeout(async () => {
                 try {
-                    if (quittingGuilds.has(`${BLACKLIST_PLATFORM}:${guildId}`)) return;
+                    if (quittingGuilds.has(dedupKey)) return;
                     const res = await evaluateSmallGroup(session.bot, guildId);
                     if (res.decision === 'quit') {
                         let groupName = res.groupName;
@@ -300,24 +326,26 @@ export function apply(ctx: Context, config: Config) {
     }
 
     ctx.on('guild-removed', async (session) => {
-        const { guildId } = session;
+        const guildId = parseGuildId(session.guildId);
+        if (!guildId) return;
+        const selfId = getBotSelfId(session.bot);
         // 统一使用 BLACKLIST_PLATFORM，确保与 gc.ban/gc.unban 操作同一行
         const platform = BLACKLIST_PLATFORM;
-        const dedupKey = `${platform}:${guildId}`;
+        const dedupKey = makeGuildKey(platform, selfId, guildId);
 
         // 离开群（无论主动退/被踢）即清除「已审核」标记：
         // 若日后被未经审核地重新拉入，将重新接受小群检测。
-        try { await clearApprovedGuild(ctx, guildId); } catch { }
+        try { await clearApprovedGuild(ctx, guildId, selfId); } catch { }
 
         // 1) 在进程内主动退群的，快速放行（同时消费持久标记，防止堆积）
         if (quittingGuilds.has(dedupKey)) {
             // 有持久标记也一并清理（不做 consumeSelfLeft 因为不需要读，直接删更干净）
-            try { await clearSelfLeft(ctx, guildId); } catch { }
+            try { await clearSelfLeft(ctx, guildId, selfId); } catch { }
             return;
         }
 
         // 2) 持久化主动退群标记：跨重启/HMR 仍然有效
-        const isSelfLeft = await consumeSelfLeft(ctx, guildId);
+        const isSelfLeft = await consumeSelfLeft(ctx, guildId, selfId);
         if (isSelfLeft) return;
 
         // 3) 根据 OneBot 原始事件判断是主动退 (leave) 还是被踢 (kick_me/kick)
@@ -339,7 +367,7 @@ export function apply(ctx: Context, config: Config) {
 
         // 6) 持久化幂等：已经被自动踢出拉黑的（reason === 'kicked'）不再重复通知
         if (config.basic.enableBlacklist || config.basic.notifyAdminOnKick) {
-            const [existing] = await ctx.database.get('blacklisted_guild', { platform, guildId });
+            const [existing] = await getBlacklistedGuild(ctx, guildId);
             if (existing && existing.reason === 'kicked') {
                 // 已拉黑过，视为重复事件，跳过（但不跳过手动拉黑 manual_add 的后续真踢通知）
                 return;
@@ -365,11 +393,14 @@ export function apply(ctx: Context, config: Config) {
     if (config.basic.notifyAdminOnMute || config.basic.muteAutoQuit) {
         ctx.on('guild-member-mute' as any, async (session: any) => {
             // 只关心 bot 自己被禁言
-            if (session.userId !== session.bot?.userId) return
+            const selfId = getBotSelfId(session.bot)
+            if (parseGuildId(session.userId) !== selfId) return
             // duration 为 0 表示解除禁言，不处理
             if (!session.duration) return
 
-            const { guildId, platform } = session
+            const { platform } = session
+            const guildId = parseGuildId(session.guildId)
+            if (!guildId) return
             const operatorId = session.operatorId || '未知'
             const duration = session.duration ?? 0
             const groupName = await getGroupName(session.bot, guildId)
@@ -388,14 +419,15 @@ export function apply(ctx: Context, config: Config) {
                 try { await createBlacklistedGuild(ctx, guildId, 'muted') } catch (e) { }
 
                 // 标记主动退群并退出（被禁言状态下无法发群消息，故不再尝试群内提示）
-                quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now())
-                await markSelfLeft(ctx, guildId)
+                const dedupKey = makeGuildKey(platform, selfId, guildId)
+                quittingGuilds.set(dedupKey, Date.now())
+                await markSelfLeft(ctx, guildId, selfId)
                 try {
-                    await session.bot.internal.setGroupLeave(parseInt(guildId))
+                    await leaveGroup(session.bot, guildId)
                 } catch (e) {
                     console.error(`被禁言自动退群失败 (群号: ${guildId}):`, e)
-                    quittingGuilds.delete(`${BLACKLIST_PLATFORM}:${guildId}`)
-                    await clearSelfLeft(ctx, guildId)
+                    quittingGuilds.delete(dedupKey)
+                    await clearSelfLeft(ctx, guildId, selfId)
                 }
                 return
             }
@@ -413,11 +445,7 @@ export function apply(ctx: Context, config: Config) {
     }
 
     if (config.basic.quitCommandEnabled) {
-        const cmdOpts: any = {};
-        // Koishi模式下使用 authority 限权
-        if (config.permission.mode === 'koishi') {
-            cmdOpts.authority = config.permission.koishiAuthority;
-        }
+        const cmdOpts = getAdminCommandOptions(config);
 
         ctx.command('quit', '让机器人主动退出当前群聊', cmdOpts)
             .action(async ({ session }) => {
@@ -429,7 +457,11 @@ export function apply(ctx: Context, config: Config) {
                     if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
                 }
 
-                const { guildId, platform, userId } = session;
+                const { platform, userId } = session;
+                const guildId = parseGuildId(session.guildId);
+                if (!guildId) return '当前群号格式无效，无法退出。';
+                const selfId = getBotSelfId(session.bot);
+                const dedupKey = makeGuildKey(platform, selfId, guildId);
 
                 // 获取群名称（此时还在群内，应该能拿到）
                 const groupName = await getGroupName(session.bot, guildId);
@@ -438,16 +470,16 @@ export function apply(ctx: Context, config: Config) {
                 const adminMsg = `收到来自 ${userId} 的退群指令\n群名称：${groupName}\n群号：${guildId}`;
                 await notifyAdmins(session.bot, config, adminMsg);
 
-                quittingGuilds.set(`${BLACKLIST_PLATFORM}:${guildId}`, Date.now());
-                await markSelfLeft(ctx, guildId);
+                quittingGuilds.set(dedupKey, Date.now());
+                await markSelfLeft(ctx, guildId, selfId);
                 try {
                     await session.bot.sendMessage(session.guildId, config.basic.quitMessage.replaceAll('{userId}', userId), platform);
                 } catch (e) { }
                 try {
-                    await session.bot.internal.setGroupLeave(parseInt(guildId));
+                    await leaveGroup(session.bot, guildId);
                 } catch (e) {
-                    quittingGuilds.delete(`${BLACKLIST_PLATFORM}:${guildId}`);
-                    await clearSelfLeft(ctx, guildId);
+                    quittingGuilds.delete(dedupKey);
+                    await clearSelfLeft(ctx, guildId, selfId);
                     return `退出失败: ${e.message}`;
                 }
                 return '';

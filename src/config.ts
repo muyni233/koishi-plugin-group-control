@@ -156,7 +156,7 @@ export const Config: Schema<Config> = Schema.intersect([
             autoApprove: Schema.boolean().default(false).description('自动通过好友申请（否则通知管理员手动处理）'),
             notifyAdminOnApprove: Schema.boolean().default(true).description('自动通过时是否仍通知管理员'),
             requestExpireDays: Schema.natural().default(7).description('待处理申请的过期天数'),
-            requestMessage: Schema.string().role('textarea').default('收到新的好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}\n\n使用 gc.fa {userId} 同意或 gc.fr {userId} 拒绝。').description('通知管理员的消息模板，支持变量 {userId}, {nickname}, {comment}'),
+            requestMessage: Schema.string().role('textarea').default('收到新的好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}\n\n使用 gc.friend-approve {userId} 同意或 gc.friend-reject {userId} 拒绝。').description('通知管理员的消息模板，支持变量 {userId}, {nickname}, {comment}'),
             approveNotificationMessage: Schema.string().role('textarea').default('已自动通过好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}').description('自动通过时的通知模板，支持变量 {userId}, {nickname}, {comment}'),
         }).description('好友申请管理'),
     }),

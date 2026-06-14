@@ -8,8 +8,21 @@ export function isBlacklistEnabled(config: Config['basic']): string | null {
 
 export function parseGuildId(input: string | undefined | null): string | null {
     if (!input) return null;  // 防止无参调用指令时 input 为 undefined 导致 .trim() 崩溃
-    const match = input.trim().match(/^onebot:(\d+)$/);
-    return match ? match[1] : (/^\d+$/.test(input.trim()) ? input.trim() : null);
+    const match = input.trim().match(/^(?:[^:]+:)?(\d+)$/);
+    return match ? match[1] : null;
+}
+
+export function toOneBotNumber(input: string | undefined | null): number | null {
+    const id = parseGuildId(input);
+    if (!id) return null;
+    const value = Number(id);
+    return Number.isSafeInteger(value) ? value : null;
+}
+
+export function getAdminCommandOptions(config: Config): Record<string, any> {
+    return config.permission.mode === 'koishi'
+        ? { authority: config.permission.koishiAuthority }
+        : {};
 }
 
 export function formatDate(timestamp: number): string {
@@ -49,49 +62,75 @@ const GUILD_ADMIN_CACHE_TTL = 30 * 1000;
 const GUILD_ADMIN_NEGATIVE_CACHE_TTL = 5 * 1000;
 const GUILD_ADMIN_CACHE_MAX = 1000;
 
-interface GuildAdminCacheEntry {
-    value: boolean
+interface LRUCacheEntry<T> {
+    value: T
     expiresAt: number
 }
 
-const guildAdminCache = new Map<string, GuildAdminCacheEntry>();
+export class SimpleLRUCache<T> {
+    private entries = new Map<string, LRUCacheEntry<T>>();
+
+    constructor(private readonly ttlMs: number, private readonly maxSize = 1000) { }
+
+    get(key: string): T | undefined {
+        const entry = this.entries.get(key);
+        if (!entry) return undefined;
+        if (entry.expiresAt <= Date.now()) {
+            this.entries.delete(key);
+            return undefined;
+        }
+        this.entries.delete(key);
+        this.entries.set(key, entry);
+        return entry.value;
+    }
+
+    set(key: string, value: T, ttlMs = this.ttlMs) {
+        this.entries.set(key, { value, expiresAt: Date.now() + ttlMs });
+        this.prune();
+    }
+
+    delete(key: string) {
+        this.entries.delete(key);
+    }
+
+    clear() {
+        this.entries.clear();
+    }
+
+    prune(now = Date.now()) {
+        for (const [key, entry] of this.entries) {
+            if (entry.expiresAt <= now) this.entries.delete(key);
+        }
+        while (this.entries.size > this.maxSize) {
+            const oldestKey = this.entries.keys().next().value;
+            if (!oldestKey) break;
+            this.entries.delete(oldestKey);
+        }
+    }
+}
+
+const guildAdminCache = new SimpleLRUCache<boolean>(GUILD_ADMIN_CACHE_TTL, GUILD_ADMIN_CACHE_MAX);
 
 function guildAdminCacheKey(session: Session): string | null {
     if (!session.guildId || !session.userId) return null;
     return `${session.platform}:${session.guildId}:${session.userId}`;
 }
 
-function pruneGuildAdminCache(now = Date.now()) {
-    for (const [key, entry] of guildAdminCache) {
-        if (entry.expiresAt <= now) guildAdminCache.delete(key);
-    }
-    while (guildAdminCache.size > GUILD_ADMIN_CACHE_MAX) {
-        const oldestKey = guildAdminCache.keys().next().value;
-        if (!oldestKey) break;
-        guildAdminCache.delete(oldestKey);
-    }
-}
-
 function getCachedGuildAdmin(session: Session): boolean | undefined {
     const key = guildAdminCacheKey(session);
     if (!key) return undefined;
-    const entry = guildAdminCache.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= Date.now()) {
-        guildAdminCache.delete(key);
-        return undefined;
-    }
-    guildAdminCache.delete(key);
-    guildAdminCache.set(key, entry);
-    return entry.value;
+    return guildAdminCache.get(key);
 }
 
 function setCachedGuildAdmin(session: Session, value: boolean) {
     const key = guildAdminCacheKey(session);
     if (!key) return;
     const ttl = value ? GUILD_ADMIN_CACHE_TTL : GUILD_ADMIN_NEGATIVE_CACHE_TTL;
-    guildAdminCache.set(key, { value, expiresAt: Date.now() + ttl });
-    pruneGuildAdminCache();
+    guildAdminCache.set(key, value, ttl);
+}
+
+export function clearGuildAdminCache() {
+    guildAdminCache.clear();
 }
 
 function hasAdminRole(member: any): boolean {
@@ -173,5 +212,6 @@ export const ADMIN_COMMANDS = new Set([
     'gc.approve', 'gc.reject', 'gc.pending',
     'gc.sg-add', 'gc.sg-rm', 'gc.sg-list',
     'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
+    'gc.friend-pending', 'gc.friend-approve', 'gc.friend-reject',
     'gc.fp', 'gc.fa', 'gc.fr',
 ]);

@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { isBlacklistEnabled, parseGuildId, formatDate, hasGlobalPermission } from '../utils'
+import { isBlacklistEnabled, parseGuildId, formatDate, hasGlobalPermission, toOneBotNumber, getAdminCommandOptions } from '../utils'
 import {
     getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
     addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist,
@@ -31,10 +31,14 @@ async function sendAsForward(session: any, title: string, lines: string[]): Prom
         const internal: any = session.bot.internal;
         if (session.guildId) {
             if (typeof internal.sendGroupForwardMsg !== 'function') throw new Error('no forward api');
-            await internal.sendGroupForwardMsg(parseInt(session.guildId), nodes);
+            const guildId = toOneBotNumber(session.guildId);
+            if (guildId == null) throw new Error('invalid guild id');
+            await internal.sendGroupForwardMsg(guildId, nodes);
         } else {
             if (typeof internal.sendPrivateForwardMsg !== 'function') throw new Error('no forward api');
-            await internal.sendPrivateForwardMsg(parseInt(session.userId), nodes);
+            const userId = toOneBotNumber(session.userId);
+            if (userId == null) throw new Error('invalid user id');
+            await internal.sendPrivateForwardMsg(userId, nodes);
         }
     } catch {
         // 降级：分段纯文本
@@ -50,7 +54,8 @@ async function deleteFriendCompat(bot: any, userId: string): Promise<void> {
     if (typeof internal?.deleteFriend !== 'function') {
         throw new Error('当前适配器不支持 delete_friend 接口');
     }
-    const n = parseInt(userId);
+    const n = toOneBotNumber(userId);
+    if (n == null) throw new Error('输入格式错误，请输入要删除的好友 QQ 号。');
     try {
         await internal.deleteFriend(n);
     } catch (e) {
@@ -60,11 +65,13 @@ async function deleteFriendCompat(bot: any, userId: string): Promise<void> {
 }
 
 export function apply(ctx: Context, config: Config) {
+    const cmdOpts = getAdminCommandOptions(config);
+
     // 注册主指令
-    ctx.command('gc', '群控管理员指令');
+    ctx.command('gc', '群控管理员指令', cmdOpts);
 
     // 黑名单命令
-    ctx.command('gc.ban <groupId:text>', '添加群聊到黑名单')
+    ctx.command('gc.ban <groupId:text>', '添加群聊到黑名单', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
@@ -75,7 +82,7 @@ export function apply(ctx: Context, config: Config) {
             return `已添加群聊 ${guildId} 到黑名单。`;
         });
 
-    ctx.command('gc.unban <groupId:text>', '从黑名单移除群聊')
+    ctx.command('gc.unban <groupId:text>', '从黑名单移除群聊', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
@@ -86,7 +93,7 @@ export function apply(ctx: Context, config: Config) {
             return removed ? `已移除群聊 ${guildId}` : `群聊 ${guildId} 不在黑名单中。`;
         });
 
-    ctx.command('gc.banlist', '查看黑名单')
+    ctx.command('gc.banlist', '查看黑名单', cmdOpts)
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
@@ -95,7 +102,7 @@ export function apply(ctx: Context, config: Config) {
             return '黑名单列表：\n' + records.map(r => `- ${r.guildId} (时间: ${formatDate(r.timestamp)})`).join('\n');
         });
 
-    ctx.command('gc.clearban', '清空黑名单')
+    ctx.command('gc.clearban', '清空黑名单', cmdOpts)
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg;
@@ -106,7 +113,7 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 小群白名单命令
-    ctx.command('gc.sg-add <groupId:text>', '解除指定群聊的小群人数限制')
+    ctx.command('gc.sg-add <groupId:text>', '解除指定群聊的小群人数限制', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const guildId = parseGuildId(input);
@@ -117,7 +124,7 @@ export function apply(ctx: Context, config: Config) {
             return `已将群聊 ${guildId} 加入小群白名单，该群不再受小群人数限制。`;
         });
 
-    ctx.command('gc.sg-rm <groupId:text>', '恢复指定群聊的小群人数限制')
+    ctx.command('gc.sg-rm <groupId:text>', '恢复指定群聊的小群人数限制', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const guildId = parseGuildId(input);
@@ -128,7 +135,7 @@ export function apply(ctx: Context, config: Config) {
             return `已将群聊 ${guildId} 从小群白名单移除，该群将恢复小群人数限制。`;
         });
 
-    ctx.command('gc.sg-list', '查看小群白名单')
+    ctx.command('gc.sg-list', '查看小群白名单', cmdOpts)
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const records = await getAllSmallGroupWhitelist(ctx);
@@ -139,7 +146,7 @@ export function apply(ctx: Context, config: Config) {
     // ======== 好友 / 群管理 ========
 
     // 列出好友（合并转发）
-    ctx.command('gc.friends', '列出机器人的好友（合并转发）')
+    ctx.command('gc.friends', '列出机器人的好友（合并转发）', cmdOpts)
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             let list: any[] = [];
@@ -160,11 +167,11 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 删除好友
-    ctx.command('gc.delfriend <userId:text>', '删除指定好友')
+    ctx.command('gc.delfriend <userId:text>', '删除指定好友', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
-            const userId = (input || '').trim();
-            if (!/^\d+$/.test(userId)) return '输入格式错误，请输入要删除的好友 QQ 号。';
+            const userId = parseGuildId(input);
+            if (!userId) return '输入格式错误，请输入要删除的好友 QQ 号。';
             try {
                 await deleteFriendCompat(session.bot, userId);
                 return `已删除好友 ${userId}。`;
@@ -174,7 +181,7 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 列出所在群（合并转发）
-    ctx.command('gc.groups', '列出机器人所在的群（合并转发）')
+    ctx.command('gc.groups', '列出机器人所在的群（合并转发）', cmdOpts)
         .action(async ({ session }) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             let list: any[] = [];
@@ -198,18 +205,22 @@ export function apply(ctx: Context, config: Config) {
         });
 
     // 退出指定群
-    ctx.command('gc.leave <groupId:text>', '让机器人退出指定群')
+    ctx.command('gc.leave <groupId:text>', '让机器人退出指定群', cmdOpts)
         .action(async ({ session }, input: string) => {
             if (!hasGlobalPermission(session, config)) return '权限不足，只有全局管理员可以执行此操作。';
             const guildId = parseGuildId(input);
             if (!guildId) return '输入格式错误，请输入要退出的群号。';
+            const selfId = parseGuildId(String(session.bot?.selfId ?? session.bot?.userId ?? ''));
+            if (!selfId) return '无法识别当前机器人账号，已取消退群。';
             // 持久标记主动退群，避免 guild-removed 误判为被踢而拉黑
-            await markSelfLeft(ctx, guildId);
+            await markSelfLeft(ctx, guildId, selfId);
             try {
-                await (session.bot.internal as any).setGroupLeave(parseInt(guildId));
+                const groupId = toOneBotNumber(guildId);
+                if (groupId == null) throw new Error('无效群号');
+                await (session.bot.internal as any).setGroupLeave(groupId);
                 return `已退出群 ${guildId}。`;
             } catch (e) {
-                await clearSelfLeft(ctx, guildId);  // 退群失败回滚标记
+                await clearSelfLeft(ctx, guildId, selfId);  // 退群失败回滚标记
                 return `退出群 ${guildId} 失败：${e.message}`;
             }
         });
