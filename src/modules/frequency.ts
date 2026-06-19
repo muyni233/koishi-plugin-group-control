@@ -1,10 +1,12 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequencyRecord } from '../database'
-import { parseGuildId } from '../utils'
+import { parseGuildId } from '../utils-id'
+import { createLogger, errorMessage } from '../logger'
 
 export const name = 'group-control-frequency'
 
+const SCOPE = 'group-control:frequency'
 const PRIVATE_GUILD_PREFIX = '__private__:'
 const frequencyLocks = new Map<string, Promise<void>>()
 
@@ -143,6 +145,8 @@ function isUserInitiatedNonCommand(session: Session): boolean {
 export function apply(ctx: Context, config: Config) {
     const freq = config.frequency
     if (!freq.enabled && !freq.privateEnabled) return
+    const logger = createLogger(ctx, SCOPE)
+
     const groupWhitelist = new Set((freq.whitelist ?? []).map(id => parseGuildId(id) ?? id))
     const privateWhitelist = new Set((freq.privateWhitelist ?? []).map(id => parseGuildId(id) ?? id))
 
@@ -150,12 +154,13 @@ export function apply(ctx: Context, config: Config) {
     // 在中间件和 command/before-execute 中被重复计数（双重消耗频率额度）
     const countedSessions = new WeakSet<Session>()
 
-    async function checkFrequency(session: Session, isCommand: boolean): Promise<boolean> {
+    async function checkFrequency(session: Session): Promise<boolean> {
         const isPrivate = !session.guildId
         const platform = session.platform
 
         if (isPrivate) {
             if (!freq.privateEnabled) return true
+            if (!session.userId) return true  // 无 userId 不可能限频
             const userId = parseGuildId(session.userId) ?? session.userId
             if (privateWhitelist.has(userId)) return true
 
@@ -168,21 +173,34 @@ export function apply(ctx: Context, config: Config) {
 
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
-                try { await session.send(freq.warnMsg) } catch (e) { }
+                try {
+                    await session.send(freq.warnMsg)
+                } catch (err) {
+                    logger.debug(`发送 warn 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             if (r.result === 'new-blocked') {
-                try { await session.send(freq.blockMsg.replace('{duration}', r.dur.toString())) } catch (e) { }
+                try {
+                    await session.send(freq.blockMsg.replace('{duration}', r.dur.toString()))
+                } catch (err) {
+                    logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             if (r.result === 'blocked') {
-                try { await session.send(freq.blockedMsg.replace('{time}', r.remaining.toString())) } catch (e) { }
+                try {
+                    await session.send(freq.blockedMsg.replace('{time}', r.remaining.toString()))
+                } catch (err) {
+                    logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             // blocked-silent
             return false
         } else {
             if (!freq.enabled) return true
+            if (!session.guildId) return true
             const normalizedGuildId = parseGuildId(session.guildId) ?? session.guildId
             if (groupWhitelist.has(normalizedGuildId)) return true
 
@@ -195,15 +213,27 @@ export function apply(ctx: Context, config: Config) {
 
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
-                try { await session.bot.sendMessage(guildId, freq.warnMsg, platform) } catch (e) { }
+                try {
+                    await session.bot.sendMessage(guildId, freq.warnMsg, platform)
+                } catch (err) {
+                    logger.debug(`发送 warn 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             if (r.result === 'new-blocked') {
-                try { await session.bot.sendMessage(guildId, freq.blockMsg.replace('{duration}', r.dur.toString()), platform) } catch (e) { }
+                try {
+                    await session.bot.sendMessage(guildId, freq.blockMsg.replace('{duration}', r.dur.toString()), platform)
+                } catch (err) {
+                    logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             if (r.result === 'blocked') {
-                try { await session.bot.sendMessage(guildId, freq.blockedMsg.replace('{time}', r.remaining.toString()), platform) } catch (e) { }
+                try {
+                    await session.bot.sendMessage(guildId, freq.blockedMsg.replace('{time}', r.remaining.toString()), platform)
+                } catch (err) {
+                    logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
+                }
                 return false
             }
             // blocked-silent
@@ -214,10 +244,11 @@ export function apply(ctx: Context, config: Config) {
     // intercept commands
     ctx.on('command/before-execute', async (argv) => {
         const session = argv.session
+        if (!session) return
         if (isSystemSession(session)) return
         // 若该消息已在中间件阶段计数（私聊指令 / @bot 指令），此处不再重复计数
         if (countedSessions.has(session)) return
-        const allowed = await checkFrequency(session, true)
+        const allowed = await checkFrequency(session)
         if (!allowed) return ''
     })
 
@@ -227,7 +258,7 @@ export function apply(ctx: Context, config: Config) {
         if (!isUserInitiatedNonCommand(session)) return next()
         // 标记该消息已计数，使后续 command/before-execute 跳过，避免双重消耗
         countedSessions.add(session)
-        const allowed = await checkFrequency(session, false)
+        const allowed = await checkFrequency(session)
         if (!allowed) return
         return next()
     }, true)

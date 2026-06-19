@@ -9,6 +9,7 @@
     "composite": true,
     "incremental": true,
     "skipLibCheck": true,
+    "strict": true,
     "esModuleInterop": true,
     "moduleResolution": "bundler",
     "jsx": "react-jsx",

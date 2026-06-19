@@ -1,5 +1,6 @@
-import { Context } from 'koishi'
-import { parseGuildId, SimpleLRUCache } from './utils'
+import { Context, Tables } from 'koishi'
+import { parseGuildId } from './utils-id'
+import { SimpleLRUCache } from './utils'
 
 export interface BlacklistedGuild {
     platform: string
@@ -179,10 +180,24 @@ function decodePendingFriendRequest(row: PendingFriendRequest): PendingFriendReq
     return { ...row, userId: unscopedId(row.userId) };
 }
 
-async function getRowsByNormalizedId(ctx: Context, table: string, field: string, platform: string, id: string): Promise<any[]> {
+/**
+ * 旧数据迁移辅助：早期版本未做 ID 规范化，库里可能存了形如 `onebot:12345` 之类带前缀的字段。
+ * 本函数把目标表 platform 维度内所有行拉出来，按归一化后的 id 比对，捞回这些「兼容性脏数据」。
+ * 调用方一般在查不到精确匹配时再回退到这里，避免每次查询都走全表。
+ */
+async function getRowsByNormalizedId<K extends keyof Tables>(
+    ctx: Context,
+    table: K,
+    field: keyof Tables[K] & string,
+    platform: string,
+    id: string,
+): Promise<Tables[K][]> {
     const normalized = normalizeId(id);
-    const rows = await (ctx.database as any).get(table, { platform });
-    return rows.filter((row: any) => normalizeId(String(row[field] ?? '')) === normalized);
+    // koishi 的 database.get 重载无法对「泛型」表名 K 做查询类型推断（具体表名才行），
+    // 且 Query<Tables[K]> 含主键字符串简写分支，与对象查询不重叠。
+    // 查询条件 { platform } 对本插件所有表都合法，故此处做一次受控的 any 断言。
+    const rows = await ctx.database.get(table, { platform } as any);
+    return rows.filter((row) => normalizeId(String((row as Record<string, unknown>)[field] ?? '')) === normalized);
 }
 
 export async function getBlacklistedGuild(ctx: Context, guildId: string) {

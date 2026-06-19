@@ -1,49 +1,40 @@
-import { Context, Session } from 'koishi'
+import { Bot, Context, Session } from 'koishi'
 import { Config } from './config'
+import { asOneBotBot, OneBotBot, OneBotMember } from './types'
+import { parseGuildId, toOneBotNumber } from './utils-id'
+import { createLogger } from './logger'
+
+// 重新导出，保持现有 import 路径不破坏
+export { parseGuildId, toOneBotNumber, formatDate } from './utils-id'
 
 export function isBlacklistEnabled(config: Config['basic']): string | null {
-    if (!config.enableBlacklist) return '黑名单功能未启用。';
-    return null;
+    if (!config.enableBlacklist) return '黑名单功能未启用。'
+    return null
 }
 
-export function parseGuildId(input: string | undefined | null): string | null {
-    if (!input) return null;  // 防止无参调用指令时 input 为 undefined 导致 .trim() 崩溃
-    const match = input.trim().match(/^(?:[^:]+:)?(\d+)$/);
-    return match ? match[1] : null;
-}
-
-export function toOneBotNumber(input: string | undefined | null): number | null {
-    const id = parseGuildId(input);
-    if (!id) return null;
-    const value = Number(id);
-    return Number.isSafeInteger(value) ? value : null;
-}
-
-export function getAdminCommandOptions(config: Config): Record<string, any> {
+export function getAdminCommandOptions(config: Config): Record<string, unknown> {
     return config.permission.mode === 'koishi'
         ? { authority: config.permission.koishiAuthority }
-        : {};
+        : {}
 }
 
-export function formatDate(timestamp: number): string {
-    return new Date(timestamp * 1000).toLocaleString();
-}
-
-export async function notifyAdmins(bot: any, config: Config, message: string) {
+/** 通知管理员：优先发到通知群，否则私聊每个 adminQQ。失败仅记录日志，不抛异常。 */
+export async function notifyAdmins(ctx: Context, bot: Bot, config: Config, message: string): Promise<void> {
+    const logger = createLogger(ctx, 'group-control:notify')
     if (config.admin.notificationGroupId) {
         try {
-            await bot.sendMessage(config.admin.notificationGroupId, message);
-            return;
-        } catch (error) {
-            console.error(`发送通知到通知群 ${config.admin.notificationGroupId} 失败:`, error);
+            await bot.sendMessage(config.admin.notificationGroupId, message)
+            return
+        } catch (err) {
+            logger.warn(`发送通知到通知群 ${config.admin.notificationGroupId} 失败`, err)
         }
     }
     if (config.admin.adminQQs?.length > 0) {
         for (const adminQQ of config.admin.adminQQs) {
             try {
-                await bot.sendPrivateMessage(adminQQ, message);
-            } catch (error) {
-                console.error(`发送通知给管理员 ${adminQQ} 失败:`, error);
+                await bot.sendPrivateMessage(adminQQ, message)
+            } catch (err) {
+                logger.warn(`发送通知给管理员 ${adminQQ} 失败`, err)
             }
         }
     }
@@ -52,15 +43,16 @@ export async function notifyAdmins(bot: any, config: Config, message: string) {
 /** 是否为全局管理员（填在 adminQQs 里的） */
 export function isGlobalAdmin(session: Session, config: Config): boolean {
     if (config.permission.mode === 'koishi') {
-        const user = session.user as any;
-        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority;
+        const user = session.user as { authority?: number } | undefined
+        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
     }
-    return config.admin.adminQQs?.includes(session.userId) ?? false;
+    if (!session.userId) return false
+    return config.admin.adminQQs?.includes(session.userId) ?? false
 }
 
-const GUILD_ADMIN_CACHE_TTL = 30 * 1000;
-const GUILD_ADMIN_NEGATIVE_CACHE_TTL = 5 * 1000;
-const GUILD_ADMIN_CACHE_MAX = 1000;
+const GUILD_ADMIN_CACHE_TTL = 30 * 1000
+const GUILD_ADMIN_NEGATIVE_CACHE_TTL = 5 * 1000
+const GUILD_ADMIN_CACHE_MAX = 1000
 
 interface LRUCacheEntry<T> {
     value: T
@@ -68,121 +60,129 @@ interface LRUCacheEntry<T> {
 }
 
 export class SimpleLRUCache<T> {
-    private entries = new Map<string, LRUCacheEntry<T>>();
+    private entries = new Map<string, LRUCacheEntry<T>>()
 
     constructor(private readonly ttlMs: number, private readonly maxSize = 1000) { }
 
     get(key: string): T | undefined {
-        const entry = this.entries.get(key);
-        if (!entry) return undefined;
+        const entry = this.entries.get(key)
+        if (!entry) return undefined
         if (entry.expiresAt <= Date.now()) {
-            this.entries.delete(key);
-            return undefined;
+            this.entries.delete(key)
+            return undefined
         }
-        this.entries.delete(key);
-        this.entries.set(key, entry);
-        return entry.value;
+        this.entries.delete(key)
+        this.entries.set(key, entry)
+        return entry.value
     }
 
-    set(key: string, value: T, ttlMs = this.ttlMs) {
-        this.entries.set(key, { value, expiresAt: Date.now() + ttlMs });
-        this.prune();
+    set(key: string, value: T, ttlMs = this.ttlMs): void {
+        this.entries.set(key, { value, expiresAt: Date.now() + ttlMs })
+        this.prune()
     }
 
-    delete(key: string) {
-        this.entries.delete(key);
+    delete(key: string): void {
+        this.entries.delete(key)
     }
 
-    clear() {
-        this.entries.clear();
+    clear(): void {
+        this.entries.clear()
     }
 
-    prune(now = Date.now()) {
+    prune(now = Date.now()): void {
         for (const [key, entry] of this.entries) {
-            if (entry.expiresAt <= now) this.entries.delete(key);
+            if (entry.expiresAt <= now) this.entries.delete(key)
         }
         while (this.entries.size > this.maxSize) {
-            const oldestKey = this.entries.keys().next().value;
-            if (!oldestKey) break;
-            this.entries.delete(oldestKey);
+            const oldestKey = this.entries.keys().next().value
+            if (!oldestKey) break
+            this.entries.delete(oldestKey)
         }
     }
 }
 
-const guildAdminCache = new SimpleLRUCache<boolean>(GUILD_ADMIN_CACHE_TTL, GUILD_ADMIN_CACHE_MAX);
+const guildAdminCache = new SimpleLRUCache<boolean>(GUILD_ADMIN_CACHE_TTL, GUILD_ADMIN_CACHE_MAX)
 
 function guildAdminCacheKey(session: Session): string | null {
-    if (!session.guildId || !session.userId) return null;
-    return `${session.platform}:${session.guildId}:${session.userId}`;
+    if (!session.guildId || !session.userId) return null
+    return `${session.platform}:${session.guildId}:${session.userId}`
 }
 
 function getCachedGuildAdmin(session: Session): boolean | undefined {
-    const key = guildAdminCacheKey(session);
-    if (!key) return undefined;
-    return guildAdminCache.get(key);
+    const key = guildAdminCacheKey(session)
+    if (!key) return undefined
+    return guildAdminCache.get(key)
 }
 
-function setCachedGuildAdmin(session: Session, value: boolean) {
-    const key = guildAdminCacheKey(session);
-    if (!key) return;
-    const ttl = value ? GUILD_ADMIN_CACHE_TTL : GUILD_ADMIN_NEGATIVE_CACHE_TTL;
-    guildAdminCache.set(key, value, ttl);
+function setCachedGuildAdmin(session: Session, value: boolean): void {
+    const key = guildAdminCacheKey(session)
+    if (!key) return
+    const ttl = value ? GUILD_ADMIN_CACHE_TTL : GUILD_ADMIN_NEGATIVE_CACHE_TTL
+    guildAdminCache.set(key, value, ttl)
 }
 
-export function clearGuildAdminCache() {
-    guildAdminCache.clear();
+export function clearGuildAdminCache(): void {
+    guildAdminCache.clear()
 }
 
-function hasAdminRole(member: any): boolean {
-    if (!member) return false;
+function hasAdminRole(member: OneBotMember | null | undefined): boolean {
+    if (!member) return false
 
-    const data = member.data ?? member.member ?? member.sender ?? member;
-    const role = data.role ?? data.memberRole ?? data.permissions;
-    if (role === 'admin' || role === 'owner' || role === 'administrator') return true;
+    // 兼容多种字段名：member.role / member.sender.role / member.data.role / member.member.role
+    const data = ((member as { data?: OneBotMember }).data
+        ?? (member as { member?: OneBotMember }).member
+        ?? (member as { sender?: OneBotMember }).sender
+        ?? member) as OneBotMember
+    const role = data.role ?? data.memberRole ?? data.permissions
+    if (role === 'admin' || role === 'owner' || role === 'administrator') return true
 
-    const roles = data.roles ?? data.roleIds;
+    const roles = data.roles ?? data.roleIds
     if (Array.isArray(roles)) {
-        return roles.some((role: string) => role === 'admin' || role === 'owner' || role === 'administrator');
+        return roles.some((roleName: string) => roleName === 'admin' || roleName === 'owner' || roleName === 'administrator')
     }
 
-    return false;
+    return false
 }
 
-async function getOneBotGroupMemberInfo(session: Session) {
-    const guildId = Number(parseGuildId(session.guildId) ?? session.guildId);
-    const userId = Number(parseGuildId(session.userId) ?? session.userId);
-    if (!Number.isFinite(guildId) || !Number.isFinite(userId)) return null;
-    return await (session.bot as any).internal?.getGroupMemberInfo?.(guildId, userId, true);
+async function getOneBotGroupMemberInfo(session: Session): Promise<OneBotMember | null> {
+    const guildId = toOneBotNumber(session.guildId)
+    const userId = toOneBotNumber(session.userId)
+    if (guildId == null || userId == null) return null
+    try {
+        return await asOneBotBot(session.bot).internal?.getGroupMemberInfo?.(guildId, userId, true) ?? null
+    } catch {
+        return null
+    }
 }
 
 /** 是否为群管理员或群主（仅 builtin 模式使用） */
 async function isGuildAdmin(session: Session): Promise<boolean> {
-    const event = session.event as any;
-    const raw = event?._data ?? (session as any).original ?? (session as any).onebot;
-    if (hasAdminRole(event?.member) || hasAdminRole(raw?.sender)) {
-        setCachedGuildAdmin(session, true);
-        return true;
+    const event = session.event as { member?: OneBotMember } | undefined
+    const rawEvent = (session.event as { _data?: { sender?: OneBotMember } } | undefined)?._data
+    if (hasAdminRole(event?.member) || hasAdminRole(rawEvent?.sender)) {
+        setCachedGuildAdmin(session, true)
+        return true
     }
 
-    const cached = getCachedGuildAdmin(session);
-    if (cached !== undefined) return cached;
+    const cached = getCachedGuildAdmin(session)
+    if (cached !== undefined) return cached
 
-    let result = false;
+    let result = false
 
-    try {
-        const member = await session.bot.getGuildMember(session.guildId, session.userId);
-        if (hasAdminRole(member)) result = true;
-    } catch { }
+    if (session.guildId && session.userId) {
+        try {
+            const member = await session.bot.getGuildMember(session.guildId, session.userId)
+            if (hasAdminRole(member as OneBotMember)) result = true
+        } catch { /* 忽略：可能没有权限或 API 不支持 */ }
+    }
 
     if (!result) {
-        try {
-            const info = await getOneBotGroupMemberInfo(session);
-            if (hasAdminRole(info)) result = true;
-        } catch { }
+        const info = await getOneBotGroupMemberInfo(session)
+        if (hasAdminRole(info)) result = true
     }
 
-    setCachedGuildAdmin(session, result);
-    return result;
+    setCachedGuildAdmin(session, result)
+    return result
 }
 
 /**
@@ -192,17 +192,19 @@ async function isGuildAdmin(session: Session): Promise<boolean> {
  */
 export async function hasGuildPermission(session: Session, config: Config): Promise<boolean> {
     if (config.permission.mode === 'koishi') {
-        const user = session.user as any;
-        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority;
+        const user = session.user as { authority?: number } | undefined
+        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
     }
-    if (isGlobalAdmin(session, config)) return true;
-    return await isGuildAdmin(session);
+    if (isGlobalAdmin(session, config)) return true
+    return await isGuildAdmin(session)
 }
 
-// 检查全局管理权限（gc.ban/gc.approve/gc.fa 等）
-// builtin 模式：仅全局管理员（adminQQs）；koishi 模式：由 authority 决定
+/**
+ * 检查全局管理权限（gc.ban/gc.approve/gc.fa 等）
+ * builtin 模式：仅全局管理员（adminQQs）；koishi 模式：由 authority 决定
+ */
 export function hasGlobalPermission(session: Session, config: Config): boolean {
-    return isGlobalAdmin(session, config);
+    return isGlobalAdmin(session, config)
 }
 
 /** 管理指令列表 - 这些指令始终不受 bot-off 影响 */
@@ -214,4 +216,7 @@ export const ADMIN_COMMANDS = new Set([
     'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
     'gc.friend-pending', 'gc.friend-approve', 'gc.friend-reject',
     'gc.fp', 'gc.fa', 'gc.fr',
-]);
+])
+
+// 兼容旧 import：让上层模块仍可写 `import { OneBotBot } from './utils'` 等。
+export type { OneBotBot } from './types'

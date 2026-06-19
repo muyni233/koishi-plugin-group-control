@@ -1,164 +1,182 @@
-import { Context } from 'koishi'
+import { Context, Command, Session } from 'koishi'
 import { Config } from '../config'
 import { getGroupBotStatus, setGroupBotStatus } from '../database'
 import { hasGuildPermission, ADMIN_COMMANDS } from '../utils'
+import { createLogger } from '../logger'
 
 export const name = 'group-control-switch'
 
+const SCOPE = 'group-control:switch'
+
 function normalizeCommandName(name: string, prefixes: string[] = []): string {
-    let source = name.trim();
+    let source = name.trim()
     for (const prefix of prefixes.filter(Boolean).sort((a, b) => b.length - a.length)) {
         if (source.startsWith(prefix)) {
-            source = source.slice(prefix.length);
-            break;
+            source = source.slice(prefix.length)
+            break
         }
     }
-    return source.replace(/^[/.!！。]+/, '').toLowerCase().replace(/_/g, '-');
+    return source.replace(/^[/.!！。]+/, '').toLowerCase().replace(/_/g, '-')
 }
 
-function getCommandNames(command: any): string[] {
-    const names = new Set<string>();
-    if (command?.name) names.add(normalizeCommandName(command.name));
-    if (command?.displayName) names.add(normalizeCommandName(command.displayName));
-    for (const alias of Object.keys(command?._aliases ?? {})) {
-        names.add(normalizeCommandName(alias));
+function getCommandNames(command: Command | undefined | null): string[] {
+    const names = new Set<string>()
+    if (!command) return []
+    if (command.name) names.add(normalizeCommandName(command.name))
+    const displayName = (command as Command & { displayName?: string }).displayName
+    if (displayName) names.add(normalizeCommandName(displayName))
+    const aliases = (command as unknown as { _aliases?: Record<string, unknown> })._aliases ?? {}
+    for (const alias of Object.keys(aliases)) {
+        names.add(normalizeCommandName(alias))
     }
-    return [...names];
+    return [...names]
 }
 
-function isAdminCommand(command: any): boolean {
-    return getCommandNames(command).some(commandName => ADMIN_COMMANDS.has(commandName));
+function isAdminCommand(command: Command | undefined | null): boolean {
+    return getCommandNames(command).some(commandName => ADMIN_COMMANDS.has(commandName))
 }
 
-function getCommandPrefixes(ctx: Context, session: any): string[] {
-    const configured = session.resolve?.(ctx.root.config.prefix as any) ?? ctx.root.config.prefix;
-    const prefixes = Array.isArray(configured) ? configured : [configured || ''];
-    return [...prefixes, '/', '.', '!', '！', '。'];
+function getCommandPrefixes(ctx: Context, session: Session): string[] {
+    const rootConfigPrefix = (ctx.root.config as { prefix?: string | string[] | ((s: Session) => string | string[]) }).prefix
+    const sessionResolve = (session as Session & { resolve?: (v: unknown) => unknown }).resolve
+    const resolved = sessionResolve ? sessionResolve(rootConfigPrefix) : rootConfigPrefix
+    // resolved 仍可能是函数（resolve 不可用时），统一兜底成字符串数组
+    const configured = typeof resolved === 'function' ? '' : resolved
+    const prefixes: string[] = Array.isArray(configured)
+        ? configured.filter((p): p is string => typeof p === 'string')
+        : [typeof configured === 'string' ? configured : '']
+    return [...prefixes, '/', '.', '!', '！', '。']
 }
 
 function stripLeadingBotMentions(content: string): string {
     return content
         .replace(/^(?:\s*<at\b[^>]*(?:\/>|>\s*<\/at>))+\s*/i, '')
-        .replace(/^(?:\s*\[CQ:at,[^\]]+\])+\s*/i, '');
+        .replace(/^(?:\s*\[CQ:at,[^\]]+\])+\s*/i, '')
 }
 
-function getMessageCommandName(ctx: Context, session: any): string | null {
-    const strippedContent = session.stripped?.content?.trim();
-    const content = stripLeadingBotMentions(strippedContent ? session.stripped.content : session.content ?? '');
-    const firstWord = content.match(/^\s*(\S+)/)?.[1];
-    return firstWord ? normalizeCommandName(firstWord, getCommandPrefixes(ctx, session)) : null;
+function getMessageCommandName(ctx: Context, session: Session): string | null {
+    const stripped = (session as Session & { stripped?: { content?: string } }).stripped
+    const strippedContent = stripped?.content?.trim()
+    const content = stripLeadingBotMentions(strippedContent ? stripped!.content! : session.content ?? '')
+    const firstWord = content.match(/^\s*(\S+)/)?.[1]
+    return firstWord ? normalizeCommandName(firstWord, getCommandPrefixes(ctx, session)) : null
 }
 
 export function apply(ctx: Context, config: Config) {
+    const logger = createLogger(ctx, SCOPE)
+
     // ======== 自定义指令权限保护 ========
-    // 无论 botSwitch 是否启用，只要配置了 protectedCommands 就生效
     if (config.permission.protectedCommands?.length > 0) {
-        const protectedSet = new Set(config.permission.protectedCommands.map(commandName => normalizeCommandName(commandName)));
+        const protectedSet = new Set(config.permission.protectedCommands.map(commandName => normalizeCommandName(commandName)))
 
         ctx.on('command/before-execute', async (argv) => {
-            const session = argv.session;
-            if (!session.guildId) return; // 仅限群聊
+            const session = argv.session
+            if (!session) return
+            if (!session.guildId) return // 仅限群聊
 
-            const commandNames = getCommandNames(argv.command);
-            if (!commandNames.some(commandName => protectedSet.has(commandName))) return; // 不在保护列表中
+            const commandNames = getCommandNames(argv.command)
+            if (!commandNames.some(commandName => protectedSet.has(commandName))) return // 不在保护列表中
 
-            const hasPerm = await hasGuildPermission(session, config);
+            const hasPerm = await hasGuildPermission(session, config)
             if (!hasPerm) {
-                return '权限不足，只有群管理员可以使用此指令。';
+                return '权限不足，只有群管理员可以使用此指令。'
             }
-        }, true);
+        }, true)
     }
 
     // ======== Bot 开关功能 ========
-    if (!config.botSwitch?.enabled) return;
+    if (!config.botSwitch?.enabled) return
 
-    const cmdOpts: any = {};
+    const cmdOpts: Record<string, unknown> = {}
     if (config.permission.mode === 'koishi') {
-        cmdOpts.authority = config.permission.koishiAuthority;
+        cmdOpts.authority = config.permission.koishiAuthority
     }
 
-    // 添加命令 bot-on 
+    // 添加命令 bot-on
     ctx.command('bot-on', '开启机器人', cmdOpts)
         .action(async ({ session }) => {
-            if (!session.guildId) return '该指令只能在群聊中使用。';
+            if (!session) return ''
+            if (!session.guildId) return '该指令只能在群聊中使用。'
 
             if (config.permission.mode === 'builtin') {
-                const hasPerm = await hasGuildPermission(session, config);
-                if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
+                const hasPerm = await hasGuildPermission(session, config)
+                if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。'
             }
 
-            await setGroupBotStatus(ctx, session.platform, session.guildId, true);
-            return '机器人已在此群开启。';
-        });
+            await setGroupBotStatus(ctx, session.platform, session.guildId, true)
+            return '机器人已在此群开启。'
+        })
 
     // 添加命令 bot-off
     ctx.command('bot-off', '关闭机器人', cmdOpts)
         .action(async ({ session }) => {
-            if (!session.guildId) return '该指令只能在群聊中使用。';
+            if (!session) return ''
+            if (!session.guildId) return '该指令只能在群聊中使用。'
 
             if (config.permission.mode === 'builtin') {
-                const hasPerm = await hasGuildPermission(session, config);
-                if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。';
+                const hasPerm = await hasGuildPermission(session, config)
+                if (!hasPerm) return '权限不足，只有群管理员可以使用此指令。'
             }
 
-            await setGroupBotStatus(ctx, session.platform, session.guildId, false);
-            return '机器人已在此群关闭。所有指令和主动响应（入群欢迎、链接解析等）将被阻止。使用 bot-on 重新开启。';
-        });
+            await setGroupBotStatus(ctx, session.platform, session.guildId, false)
+            return '机器人已在此群关闭。所有指令和主动响应（入群欢迎、链接解析等）将被阻止。使用 bot-on 重新开启。'
+        })
 
     // 拦截除管理指令以外的所有指令
     ctx.on('command/before-execute', async (argv) => {
-        const session = argv.session;
-        if (!session.guildId) return; // 仅限群聊
+        const session = argv.session
+        if (!session) return
+        if (!session.guildId) return // 仅限群聊
 
         // 允许管理指令
         if (isAdminCommand(argv.command)) {
-            return;
+            return
         }
 
-        const status = await getGroupBotStatus(ctx, session.platform, session.guildId);
-        const isBotEnabled = status ? status.botEnabled : config.botSwitch.defaultState;
+        const status = await getGroupBotStatus(ctx, session.platform, session.guildId)
+        const isBotEnabled = status ? status.botEnabled : config.botSwitch.defaultState
 
         if (!isBotEnabled) {
             // 检查是否有 @ 机器人
-            const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs.id === session.bot.userId);
+            const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs?.id === session.bot.userId)
             if (isMentioned && config.botSwitch.disabledMessage) {
                 try {
-                    await session.send(config.botSwitch.disabledMessage);
-                } catch (e) {
-                    ctx.logger('group-control-switch').warn('发送关闭提示失败', e);
+                    await session.send(config.botSwitch.disabledMessage)
+                } catch (err) {
+                    logger.warn('发送关闭提示失败', err)
                 }
             }
-            return '';
+            return ''
         }
-    }, true);
+    }, true)
 
-    // 中间件：阻止关闭状态下的所有非指令响应（入群欢迎、链接解析等其他插件的处理）
+    // 中间件：阻止关闭状态下的所有非指令响应
     ctx.middleware(async (session, next) => {
-        if (!session.guildId) return next();
+        if (!session.guildId) return next()
 
-        const status = await getGroupBotStatus(ctx, session.platform, session.guildId);
-        const isBotEnabled = status ? status.botEnabled : config.botSwitch.defaultState;
+        const status = await getGroupBotStatus(ctx, session.platform, session.guildId)
+        const isBotEnabled = status ? status.botEnabled : config.botSwitch.defaultState
 
         if (isBotEnabled) {
-            return next(); // 如果已开启，则放行
+            return next()
         }
         // 放行管理指令
-        const commandName = session.argv?.command && isAdminCommand(session.argv.command)
-            ? session.argv.command.name
-            : getMessageCommandName(ctx, session);
+        const argvCommand = (session as Session & { argv?: { command?: Command } }).argv?.command
+        const commandName = argvCommand && isAdminCommand(argvCommand)
+            ? argvCommand.name
+            : getMessageCommandName(ctx, session)
         if (commandName && ADMIN_COMMANDS.has(normalizeCommandName(commandName))) {
-            return next();
+            return next()
         }
-        // 在已关闭状态下：
-        // 检查是否有 @ 机器人
-        const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs.id === session.bot.userId);
+        // 在已关闭状态下：检查是否有 @ 机器人
+        const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs?.id === session.bot.userId)
         if (isMentioned && config.botSwitch.disabledMessage) {
             try {
-                await session.send(config.botSwitch.disabledMessage);
-            } catch (e) { }
+                await session.send(config.botSwitch.disabledMessage)
+            } catch { /* 忽略发送失败 */ }
         }
 
-        // 不调用 next() 以阻断所有后续中间件（包括其他插件的响应）
-        return;
-    }, true); // prepend = true, 优先于其他中间件执行
+        // 不调用 next() 以阻断所有后续中间件
+        return
+    }, true)
 }
