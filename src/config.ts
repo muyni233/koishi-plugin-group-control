@@ -1,23 +1,27 @@
 import { Schema } from 'koishi'
 
 export interface GroupConfig {
+    // —— 欢迎消息 / quit 指令 ——
     welcomeMessage: string
-    quitMessage: string
     quitCommandEnabled: boolean
+    quitMessage: string
+    // —— 被踢自动拉黑 ——
     enableBlacklist: boolean
     blacklistMessage: string
     notifyAdminOnKick: boolean
     kickNotificationMessage: string
+    // —— 小群自动退群 ——
     smallGroupAutoQuit: boolean
     smallGroupThreshold: number
+    smallGroupExcludeOfficialBots: boolean
+    smallGroupCheckDelay: number
     smallGroupQuitMessage: string
     smallGroupNotifyAdmin: boolean
-    smallGroupCheckDelay: number
-    smallGroupExcludeOfficialBots: boolean
-    smallGroupRealtimeMonitor: boolean
-    smallGroupRecheckCooldown: number
     smallGroupQualifiedNotifyAdmin: boolean
     smallGroupQualifiedMessage: string
+    smallGroupRealtimeMonitor: boolean
+    smallGroupRecheckCooldown: number
+    // —— 被禁言处理 ——
     notifyAdminOnMute: boolean
     muteNotificationMessage: string
     muteAutoQuit: boolean
@@ -38,7 +42,6 @@ export interface GroupInviteConfig {
     notifyAdminOnApprove: boolean
     inviteApproveMessage: string
     inviteApproveNotificationMessage: string
-    showDetailedLog: boolean
     inviteExpireDays: number
 }
 
@@ -84,6 +87,10 @@ export interface PermissionConfig {
     protectedCommands: string[]
 }
 
+export interface LoggingConfig {
+    verbose: boolean
+}
+
 export interface Config {
     admin: AdminConfig
     permission: PermissionConfig
@@ -92,6 +99,7 @@ export interface Config {
     friend: FriendConfig
     frequency: FrequencyConfig
     botSwitch: BotSwitchConfig
+    logging: LoggingConfig
 }
 
 export const Config: Schema<Config> = Schema.intersect([
@@ -113,27 +121,31 @@ export const Config: Schema<Config> = Schema.intersect([
     }),
     Schema.object({
         basic: Schema.object({
+            // —— 入群欢迎 / quit 指令 ——
             welcomeMessage: Schema.string().default('你好，我是机器人。').description('加入群聊时发送的欢迎消息'),
             quitCommandEnabled: Schema.boolean().default(true).description('启用 quit 指令'),
-            quitMessage: Schema.string().default('收到来自{userId}的指令，即将退出群聊。').description('quit 指令触发后的群内提示，支持变量 {userId}'),
+            quitMessage: Schema.string().role('textarea').default('收到来自{userId}的指令，即将退出群聊。').description('quit 指令触发后的群内提示，支持变量 {userId}'),
+            // —— 被踢自动拉黑 ——
             enableBlacklist: Schema.boolean().default(true).description('启用被踢出自动拉黑'),
             blacklistMessage: Schema.string().role('textarea').default('此群聊已被拉黑，机器人将自动退出，请联系管理员移出黑名单。').description('被拉入黑名单群后的提示'),
             notifyAdminOnKick: Schema.boolean().default(true).description('被踢出群时通知管理员'),
             kickNotificationMessage: Schema.string().role('textarea').default('机器人已被踢出群聊\n群名称：{groupName}\n群号：{groupId}\n该群已被自动加入黑名单。').description('被踢出群通知模板，支持变量 {groupId}, {groupName}'),
+            // —— 小群自动退群 ——
             smallGroupAutoQuit: Schema.boolean().default(false).description('启用小群自动退群'),
-            smallGroupThreshold: Schema.natural().default(30).description('小群人数阈值（低于等于此值时自动退群）'),
-            smallGroupCheckDelay: Schema.natural().default(3000).description('加入后延迟检测时间（毫秒）'),
-            smallGroupExcludeOfficialBots: Schema.boolean().default(true).description('统计群人数时排除 QQ 官方机器人（is_robot）及机器人自身，仅统计真人成员'),
-            smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控群人数（监听成员退群事件，群缩小到阈值以下时自动退群）'),
-            smallGroupRecheckCooldown: Schema.natural().default(60).description('实时监控：同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调用接口'),
+            smallGroupThreshold: Schema.natural().default(30).description('小群人数阈值（真人数 ≤ 此值即判为小群）'),
+            smallGroupExcludeOfficialBots: Schema.boolean().default(true).description('统计人数时排除 QQ 官方机器人（is_robot）及机器人自身，仅统计真人'),
+            smallGroupCheckDelay: Schema.natural().default(3000).description('入群后延迟检测的时间（毫秒），等待成员列表就绪'),
             smallGroupQuitMessage: Schema.string().role('textarea').default('该群人数过少（{memberCount}人），不满足最低人数要求（{threshold}人），机器人将自动退出。').description('小群退群提示，支持变量 {memberCount}, {threshold}, {groupName}, {groupId}'),
             smallGroupNotifyAdmin: Schema.boolean().default(true).description('小群自动退群时通知管理员'),
-            smallGroupQualifiedNotifyAdmin: Schema.boolean().default(true).description('未经审核被拉入人数达标的群时通知管理员'),
+            smallGroupQualifiedNotifyAdmin: Schema.boolean().default(true).description('被未经审核拉入但人数达标的群是否通知管理员'),
             smallGroupQualifiedMessage: Schema.string().role('textarea').default('机器人被未经审核地拉入群聊\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）\n请确认是否保留。').description('合格小群通知模板，支持变量 {groupName}, {groupId}, {memberCount}, {threshold}'),
+            smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控：监听成员退群事件，群缩小到阈值以下时再次自动退群'),
+            smallGroupRecheckCooldown: Schema.natural().default(60).description('实时监控：同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调接口'),
+            // —— 被禁言处理 ——
             notifyAdminOnMute: Schema.boolean().default(false).description('机器人被禁言时通知管理员'),
             muteNotificationMessage: Schema.string().role('textarea').default('机器人在群聊中被禁言\n群名称：{groupName}\n群号：{groupId}\n操作者：{operatorId}\n禁言时长：{duration}秒').description('被禁言通知模板，支持变量 {groupId}, {groupName}, {operatorId}, {duration}'),
-            muteAutoQuit: Schema.boolean().default(false).description('机器人被禁言达到阈值时自动退群并拉黑'),
-            muteAutoQuitThreshold: Schema.natural().default(600).description('触发自动退群的禁言时长阈值（秒），被禁言时长 ≥ 此值即退群并拉黑'),
+            muteAutoQuit: Schema.boolean().default(false).description('被禁言达到阈值时自动退群并拉黑'),
+            muteAutoQuitThreshold: Schema.natural().default(600).description('触发自动退群的禁言时长阈值（秒），被禁言 ≥ 此值即退群并拉黑'),
             muteQuitNotificationMessage: Schema.string().role('textarea').default('机器人被长时间禁言，已自动退群并拉黑\n群名称：{groupName}\n群号：{groupId}\n操作者：{operatorId}\n禁言时长：{duration}秒').description('被禁言自动退群时发给管理员的通知模板，支持变量 {groupId}, {groupName}, {operatorId}, {duration}'),
         }).description('基础群组管理'),
     }),
@@ -147,7 +159,6 @@ export const Config: Schema<Config> = Schema.intersect([
             inviteRequestMessage: Schema.string().role('textarea').default('收到新的群聊邀请请求：\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})\n\n请使用指令 gc.approve {groupId} 同意或 gc.reject {groupId} 拒绝。').description('发给管理员的请求消息模板，支持变量 {groupName}, {groupId}, {userName}, {userId}'),
             inviteApproveNotificationMessage: Schema.string().role('textarea').default('已自动通过群聊邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName} (QQ: {userId})').description('自动同意时发给管理员的通知模板，支持变量 {groupName}, {groupId}, {userName}, {userId}'),
             inviteExpireDays: Schema.natural().default(3).description('邀请记录过期天数'),
-            showDetailedLog: Schema.boolean().default(false).description('显示详细日志'),
         }).description('群聊邀请审核'),
     }),
     Schema.object({
@@ -171,12 +182,12 @@ export const Config: Schema<Config> = Schema.intersect([
             privateEnabled: Schema.boolean().default(false).description('启用私聊频率控制'),
             privateLimit: Schema.natural().default(10).description('私聊：时间窗口内允许的最大触发次数'),
             privateWindow: Schema.natural().default(60).description('私聊：时间窗口（秒）'),
-            privateWarnDelay: Schema.natural().default(30).description('私聊：警告后再次触发的时间阈值（秒）'),
+            privateWarnDelay: Schema.natural().default(30).description('私聊：警告后再次触发的时间阈值（秒），超出则进入屏蔽'),
             privateBlockDur: Schema.natural().default(300).description('私聊：首次屏蔽的基础时长（秒）'),
             privateWhitelist: Schema.array(String).default([]).description('私聊：不受频率限制的用户ID列表'),
-            blockExpBase: Schema.natural().min(1).default(2).description('屏蔽时长指数增长底数（时长 = blockDur × base^(次数-1)），设为 1 禁用'),
-            blockExpWindow: Schema.natural().default(3600).description('指数增长重置窗口（秒），从最后一次屏蔽结束计算，超出则重置次数'),
-            blockNotifyCooldown: Schema.natural().default(60).description('屏蔽期间提示消息的冷却时间（秒），避免刷屏'),
+            blockExpBase: Schema.natural().min(1).default(2).description('全局：屏蔽时长指数增长底数（时长 = blockDur × base^(次数-1)），设为 1 禁用'),
+            blockExpWindow: Schema.natural().default(3600).description('全局：指数增长重置窗口（秒），从最后一次屏蔽结束计算，超出则重置次数'),
+            blockNotifyCooldown: Schema.natural().default(60).description('全局：屏蔽期间提示消息的冷却时间（秒），避免刷屏'),
             warnMsg: Schema.string().default('发言频率过高，请慢一点~').description('首次超限警告消息'),
             blockMsg: Schema.string().default('发言频率过高，已被禁用 {duration} 秒。').description('进入屏蔽时的通知，支持变量 {duration}'),
             blockedMsg: Schema.string().default('暂时被禁用，还有 {time} 秒解禁。').description('屏蔽期间再次触发时的提示，支持变量 {time}'),
@@ -188,5 +199,10 @@ export const Config: Schema<Config> = Schema.intersect([
             defaultState: Schema.boolean().default(true).description('默认开启状态'),
             disabledMessage: Schema.string().role('textarea').default('机器人当前在此群处于关闭状态，请使用 bot-on 开启。').description('关闭状态下被 @ 时的提示'),
         }).description('机器人开关控制'),
+    }),
+    Schema.object({
+        logging: Schema.object({
+            verbose: Schema.boolean().default(false).description('显示详细日志'),
+        }).description('日志配置'),
     }),
 ]) as Schema<Config>

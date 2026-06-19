@@ -30,7 +30,7 @@ async function handleInviteRequest(bot: OneBotBot, flag: string, approve: boolea
 export function apply(ctx: Context, config: Config) {
     if (!config.invite.enabled) return
 
-    const logger = createLogger(ctx, SCOPE, { verbose: config.invite.showDetailedLog })
+    const logger = createLogger(ctx, SCOPE, config)
 
     // 定期清理超时的邀请
     ctx.setInterval(async () => {

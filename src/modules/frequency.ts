@@ -145,7 +145,7 @@ function isUserInitiatedNonCommand(session: Session): boolean {
 export function apply(ctx: Context, config: Config) {
     const freq = config.frequency
     if (!freq.enabled && !freq.privateEnabled) return
-    const logger = createLogger(ctx, SCOPE)
+    const logger = createLogger(ctx, SCOPE, config)
 
     const groupWhitelist = new Set((freq.whitelist ?? []).map(id => parseGuildId(id) ?? id))
     const privateWhitelist = new Set((freq.privateWhitelist ?? []).map(id => parseGuildId(id) ?? id))

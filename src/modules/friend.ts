@@ -16,7 +16,7 @@ const SCOPE = 'group-control:friend'
 export function apply(ctx: Context, config: Config) {
     if (!config.friend.enabled) return
 
-    const logger = createLogger(ctx, SCOPE)
+    const logger = createLogger(ctx, SCOPE, config)
 
     // 定期清理过期申请
     ctx.setInterval(async () => {

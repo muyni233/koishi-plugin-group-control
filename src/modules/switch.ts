@@ -63,7 +63,7 @@ function getMessageCommandName(ctx: Context, session: Session): string | null {
 }
 
 export function apply(ctx: Context, config: Config) {
-    const logger = createLogger(ctx, SCOPE)
+    const logger = createLogger(ctx, SCOPE, config)
 
     // ======== 自定义指令权限保护 ========
     if (config.permission.protectedCommands?.length > 0) {

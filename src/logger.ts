@@ -1,7 +1,8 @@
 import { Context, Logger } from 'koishi'
+import { Config } from './config'
 
 /**
- * 统一日志接口。每个模块通过 createLogger(ctx, scope) 获取一个实例，
+ * 统一日志接口。每个模块通过 createLogger(ctx, scope, config) 获取一个实例，
  * 模块内一律走它，禁止再用 console.* 或裸 ctx.logger。
  *
  * 设计原则：
@@ -9,8 +10,7 @@ import { Context, Logger } from 'koishi'
  *   - error 接受 unknown：避免每个 catch 都重复写 `e instanceof Error ? e.message : ...`。
  *   - event(name, fields) 输出 `[name] k=v k=v` 风格的结构化串，
  *     用于事件触发/状态变化等可被 grep 的关键日志，替代旧的手写 `[guild-added] ...` 前缀。
- *   - verbose 开关：debug 与 detail 等细节日志只在开启时输出，
- *     统一替代旧代码里散落的 `if (config.xxx.showDetailedLog) console.log(...)`。
+ *   - 全局 verbose 开关：debug 与 detail 等细节日志只在 config.logging.verbose 开启时输出。
  */
 export interface ScopedLogger {
     /** 关键错误：始终输出。第二个参数支持 unknown，自动展开 Error.stack。 */
@@ -30,7 +30,7 @@ export interface ScopedLogger {
 }
 
 export interface LoggerOptions {
-    /** 是否输出 debug 级别日志，对应旧的 showDetailedLog 等开关 */
+    /** 是否输出 debug 级别日志，对应 config.logging.verbose */
     verbose?: boolean
 }
 
@@ -85,9 +85,21 @@ export function errorMessage(err: unknown): string {
     }
 }
 
-export function createLogger(ctx: Context, scope: string, options: LoggerOptions = {}): ScopedLogger {
+/** 从全局 Config 读取是否开启详细日志，统一由 config.logging.verbose 控制 */
+export function isVerbose(config: Config): boolean {
+    return config.logging?.verbose ?? false
+}
+
+export function createLogger(ctx: Context, scope: string, optionsOrConfig?: LoggerOptions | Config): ScopedLogger {
     const base: Logger = ctx.logger(scope)
-    const verbose = options.verbose ?? false
+    let verbose = false
+    if (optionsOrConfig !== undefined) {
+        if ('verbose' in optionsOrConfig && typeof optionsOrConfig.verbose === 'boolean') {
+            verbose = optionsOrConfig.verbose
+        } else {
+            verbose = isVerbose(optionsOrConfig as Config)
+        }
+    }
 
     return {
         error(message, err) {

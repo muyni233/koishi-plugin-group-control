@@ -71,7 +71,7 @@ async function deleteFriendCompat(session: Session, userId: string): Promise<voi
 
 export function apply(ctx: Context, config: Config) {
     const cmdOpts = getAdminCommandOptions(config)
-    const logger = createLogger(ctx, SCOPE)
+    const logger = createLogger(ctx, SCOPE, config)
 
     // 注册主指令
     ctx.command('gc', '群控管理员指令', cmdOpts)

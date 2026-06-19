@@ -161,12 +161,39 @@ export function getMemberUserId(m: OneBotMember | null | undefined): string {
     return parseGuildId(String(raw)) ?? String(raw)
 }
 
-/** 判定一个群成员是否应被视为「机器人」：QQ 官方机器人 (is_robot) 或 bot 自身 */
+function isTruthyRobotFlag(v: unknown): boolean {
+    if (v === true || v === 1 || v === '1') return true
+    if (typeof v === 'string' && v.toLowerCase() === 'true') return true
+    return false
+}
+
+/** 判定一个群成员是否应被视为「机器人」：QQ 官方机器人 (is_robot) 或 bot 自身。
+ *
+ * 极度宽松的字段兼容：
+ *   - 字段名：is_robot/isRobot/is_bot/isBot、user.isBot/user.is_robot 等；
+ *   - 值类型：boolean true/1/"1"/"true" 大小写不敏感；
+ *   - 字段层级：顶级、或嵌套在 data/member/sender 下的都会扫一遍。
+ */
 export function isBotMember(m: OneBotMember | null | undefined, selfId: string | null): boolean {
     if (!m) return false
     if (selfId && getMemberUserId(m) === selfId) return true
-    if (m.is_robot === true) return true
-    if (m.isRobot === true) return true
-    if (m.user?.isBot === true) return true
+
+    // 兼容嵌套层级（常见适配器套一层 data/member/sender）
+    const targets = [
+        m,
+        (m as { data?: OneBotMember }).data,
+        (m as { member?: OneBotMember }).member,
+        (m as { sender?: OneBotMember }).sender,
+        m.user,
+    ]
+
+    for (const t of targets) {
+        if (!t) continue
+        if (isTruthyRobotFlag((t as { is_robot?: unknown }).is_robot)) return true
+        if (isTruthyRobotFlag((t as { isRobot?: unknown }).isRobot)) return true
+        if (isTruthyRobotFlag((t as { is_bot?: unknown }).is_bot)) return true
+        if (isTruthyRobotFlag((t as { isBot?: unknown }).isBot)) return true
+        if (isTruthyRobotFlag((t as { is_robot?: unknown }).is_robot)) return true
+    }
     return false
 }

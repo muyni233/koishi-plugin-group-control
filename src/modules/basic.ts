@@ -4,7 +4,7 @@ import { notifyAdmins, hasGuildPermission, getAdminCommandOptions } from '../uti
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
     asOneBotBot, OneBotBot, OneBotMember, OneBotGroupInfo,
-    getBotSelfId, getRawEvent, isBotMember,
+    getBotSelfId, getMemberUserId, getRawEvent, isBotMember,
 } from '../types'
 import { createLogger, errorMessage, ScopedLogger } from '../logger'
 import {
@@ -92,7 +92,7 @@ async function getGroupMemberList(bot: OneBotBot, guildId: string, logger: Scope
 }
 
 export function apply(ctx: Context, config: Config) {
-    const logger = createLogger(ctx, SCOPE)
+    const logger = createLogger(ctx, SCOPE, config)
 
     // 使用 Map 记录主动退群的时间戳，保留一段时间防止 guild-removed 多次触发
     const quittingGuilds = new Map<string, number>()
@@ -208,6 +208,20 @@ export function apply(ctx: Context, config: Config) {
                 is_robot: sample?.is_robot,
                 isRobot: sample?.isRobot,
             }, 'debug')
+            // verbose 开时，打印所有成员的关键机器人标记字段，用于排查
+            logger.debug(`[smallGroup.memberDetails] guildId=${guildId} first 30 members details:`)
+            for (let i = 0; i < Math.min(list.length, 30); i++) {
+                const m = list[i]
+                const uid = getMemberUserId(m)
+                const flags = [
+                    `is_robot=${JSON.stringify(m.is_robot)}`,
+                    `isRobot=${JSON.stringify(m.isRobot)}`,
+                    `is_bot=${JSON.stringify((m as { is_bot?: unknown }).is_bot)}`,
+                    `user.isBot=${JSON.stringify(m.user?.isBot)}`,
+                    `user.is_robot=${JSON.stringify((m.user as { is_robot?: unknown })?.is_robot)}`,
+                ].join(', ')
+                logger.debug(`  [${i}] uid=${uid} ${flags}`)
+            }
         }
 
         if (list.length === 0) {
