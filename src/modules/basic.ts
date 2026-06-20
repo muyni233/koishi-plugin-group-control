@@ -4,7 +4,7 @@ import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl } f
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
     asOneBotBot, OneBotBot, OneBotMember,
-    getBotSelfId, getMemberUserId, getRawEvent, isBotMember,
+    getBotSelfId, getMemberUserId, getRawEvent,
 } from '../types'
 import { createLogger, errorMessage, ScopedLogger } from '../logger'
 import {
@@ -69,6 +69,39 @@ async function getGroupMemberList(bot: OneBotBot, guildId: string, logger: Scope
     return []
 }
 
+/**
+ * 从 get_robot_uin_range 的原始返回里解析出号段区间数组。
+ * 兼容 { data: [...] } 包裹与裸数组，以及字段名 minUin/maxUin（或 min/max）。
+ * 区间端点统一转成 number（官方机器人号段最大 ~4e9，远在安全整数内）。
+ */
+function parseRobotUinRanges(raw: unknown): { min: number; max: number }[] | null {
+    const arr = Array.isArray(raw) ? raw
+        : (raw as { data?: unknown } | null | undefined)?.data
+    if (!Array.isArray(arr)) return null
+    const out: { min: number; max: number }[] = []
+    for (const item of arr) {
+        const obj = item as Record<string, unknown> | null
+        if (!obj) continue
+        const minRaw = obj.minUin ?? obj.min
+        const maxRaw = obj.maxUin ?? obj.max
+        const min = Number(minRaw)
+        const max = Number(maxRaw)
+        if (!Number.isFinite(min) || !Number.isFinite(max)) continue
+        out.push({ min, max: max < min ? min : max })
+    }
+    return out.length > 0 ? out : null
+}
+
+/** 判定一个纯数字 uin 是否落在任一官方机器人号段区间内 */
+function isUinInRobotRange(uin: string, ranges: { min: number; max: number }[]): boolean {
+    const n = Number(uin)
+    if (!Number.isFinite(n)) return false
+    for (const r of ranges) {
+        if (n >= r.min && n <= r.max) return true
+    }
+    return false
+}
+
 export function apply(ctx: Context, config: Config) {
     const logger = createLogger(ctx, SCOPE, config)
 
@@ -80,6 +113,32 @@ export function apply(ctx: Context, config: Config) {
     const processedAdds = new Map<string, number>()
     // 实时监控：记录每个群上次复检时间，做冷却限流
     const realtimeLastCheck = new Map<string, number>()
+
+    // 官方机器人号段区间缓存（per-bot，号段基本不变，进程级缓存一次即可）
+    // 仅 smallGroupRobotUinRangeMode 开启时使用
+    const robotUinRangeCache = new Map<string, { min: number; max: number }[] | null>()
+
+    /** 获取官方机器人号段区间。返回 null 表示接口不可用/调用失败（调用方应回退 is_robot）。
+     *  null 会被缓存以避免反复调用不可用的接口。 */
+    async function getRobotUinRanges(bot: OneBotBot): Promise<{ min: number; max: number }[] | null> {
+        const selfId = getBotSelfId(bot) ?? ''
+        const cacheKey = selfId || '_default'
+        if (robotUinRangeCache.has(cacheKey)) return robotUinRangeCache.get(cacheKey) ?? null
+        let ranges: { min: number; max: number }[] | null = null
+        try {
+            if (typeof bot.internal.getRobotUinRange === 'function') {
+                const raw = await bot.internal.getRobotUinRange()
+                ranges = parseRobotUinRanges(raw)
+                if (!ranges) logger.debug('get_robot_uin_range 返回无法解析的号段数据，回退 is_robot')
+            } else {
+                logger.debug('当前适配器不支持 get_robot_uin_range 接口，回退 is_robot')
+            }
+        } catch (err) {
+            logger.debug(`get_robot_uin_range 调用失败，回退 is_robot ${errorMessage(err)}`)
+        }
+        robotUinRangeCache.set(cacheKey, ranges)
+        return ranges
+    }
 
     const QUITTING_EXPIRE_MS = 60 * 1000  // 60秒后过期
     const KICK_DEDUP_MS = 60 * 1000       // 60秒内同一群的踢出不重复处理
@@ -204,14 +263,33 @@ export function apply(ctx: Context, config: Config) {
         // 统计机器人：当 bots ≥ N - threshold 时，真人数必 ≤ 阈值，可提前结束
         const selfId = getBotSelfId(bot)
         const botsNeeded = N - threshold
+
+        // 号段模式：开关开启时改用 get_robot_uin_range 号段区间判定官方机器人
+        // （适配器 is_robot 字段失效时的临时方案）。号段拿不到则回退 is_robot。
+        let robotRanges: { min: number; max: number }[] | null = null
+        let useRangeMode = false
+        if (config.basic.smallGroupRobotUinRangeMode) {
+            robotRanges = await getRobotUinRanges(bot)
+            useRangeMode = robotRanges !== null
+            if (useRangeMode) {
+                logger.event('smallGroup.robotUinRange', { guildId, ranges: robotRanges!.length }, 'debug')
+            }
+        }
+        const isBot = (m: OneBotMember): boolean => {
+            if (selfId && getMemberUserId(m) === selfId) return true
+            if (useRangeMode) return isUinInRobotRange(getMemberUserId(m), robotRanges!)
+            return m.is_robot === true
+        }
+
         let bots = 0
         for (const m of list) {
-            if (isBotMember(m, selfId)) {
+            if (isBot(m)) {
                 bots++
                 if (bots >= botsNeeded) {
                     // 真人数 = N - bots ≤ threshold，判定为小群，无需继续遍历
                     logger.event('smallGroup.decision', {
                         guildId, total: N, bots, real: N - bots, threshold, decision: 'quit-early',
+                        mode: useRangeMode ? 'uin-range' : 'is_robot',
                     })
                     return { decision: 'quit', count: N - bots, groupName }
                 }
@@ -221,6 +299,7 @@ export function apply(ctx: Context, config: Config) {
         logger.event('smallGroup.decision', {
             guildId, total: N, bots, real, threshold,
             decision: real <= threshold ? 'quit' : 'keep',
+            mode: useRangeMode ? 'uin-range' : 'is_robot',
         })
         return { decision: real <= threshold ? 'quit' : 'keep', count: real, groupName }
     }

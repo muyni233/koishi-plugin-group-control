@@ -74,6 +74,7 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `smallGroupExcludeOfficialBots` | `true` | 统计群人数时排除 QQ 官方机器人（`is_robot`）及机器人自身，仅统计真人成员 |
 | `smallGroupRealtimeMonitor` | `true` | 实时监控群人数：监听成员退群事件，群缩小到阈值以下时自动退群（仅监控未经审核拉入的群） |
 | `smallGroupRecheckCooldown` | `60` | 实时监控时同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调用接口 |
+| `smallGroupRobotUinRangeMode` | `false` | 调试用：改用 `get_robot_uin_range` 号段区间判定官方机器人（适配器 `is_robot` 字段失效时启用，接口不可用或调用失败时自动回退 `is_robot`） |
 | `smallGroupQuitMessage` | *(见配置)* | 退群提示，支持 `{memberCount}`, `{threshold}`, `{groupName}`, `{groupId}` |
 | `smallGroupNotifyAdmin` | `true` | 自动退群时通知管理员 |
 | `smallGroupCheckDelay` | `3000` | 加入后延迟检测的时间（毫秒） |
@@ -210,4 +211,5 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 - 频率控制的非指令拦截（@ 对话、私聊）不影响入群欢迎等系统事件
 - 小群合格通知仅在启用了 `smallGroupAutoQuit` 且未经 `gc.approve` 审核通过的情况下触发
 - **小群人数统计**：开启 `smallGroupExcludeOfficialBots` 后只计真人成员（排除 `is_robot` 机器人与自身）。检测做了分级短路以减少接口调用——原始人数 ≤ 阈值直接退群、原始人数 > 阈值 + 20（单群机器人上限）直接保留，仅当人数处于中间区间时才拉取一次成员列表，且统计到足够机器人即提前结束遍历
+- **号段判定模式（调试用）**：适配器 `is_robot` 字段不准时，开启 `smallGroupRobotUinRangeMode` 改用 `get_robot_uin_range` 号段区间判定官方机器人；接口不可用时自动回退 `is_robot`
 - **实时小群监控**：纯事件驱动（仅监听成员退群），不做轮询，配合 per-群冷却限流，几乎不增加接口压力。**经 `gc.approve` 审核通过或在小群白名单中的群永久豁免**，仅监控未经审核被拉入的群；机器人退出某群后其审核标记自动清除，若日后被未经审核地重新拉入会重新接受检测
