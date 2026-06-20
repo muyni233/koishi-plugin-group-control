@@ -1,6 +1,6 @@
-import { Bot, Context, Session } from 'koishi'
+import { Bot, Command, Context, h, Session } from 'koishi'
 import { Config } from './config'
-import { asOneBotBot, OneBotBot, OneBotMember } from './types'
+import { asOneBotBot, OneBotMember } from './types'
 import { parseGuildId, toOneBotNumber } from './utils-id'
 import { createLogger } from './logger'
 
@@ -18,7 +18,24 @@ export function getAdminCommandOptions(config: Config): Record<string, unknown> 
         : {}
 }
 
-/** 通知管理员：优先发到通知群，否则私聊每个 adminQQ。失败仅记录日志，不抛异常。 */
+/**
+ * 模板插值并转义。把 `{key}` 替换为 fields[key] 的字符串形式，并对插值内容做 h.escape。
+ *
+ * 必须转义的原因：群名 / 昵称 / 附言等字段来自不可信的外部输入，而 koishi 的 sendMessage
+ * 会对字符串做 h.parse——未转义的 `<img>`、`<at>` 等会被解析成消息元素，让外部输入能借
+ * 群名/附言在管理员通知或群里发图片、@全体。模板字面量本身（如固定文案）不经过插值，
+ * 不受影响。
+ */
+export function escapeTpl(template: string, fields: Record<string, string | number>): string {
+    let out = template
+    for (const [key, value] of Object.entries(fields)) {
+        const safe = h.escape(String(value))
+        out = out.split(`{${key}}`).join(safe)
+    }
+    return out
+}
+
+/** 通知管理员：优先发到通知群，否则私聊每个 adminQQ。 */
 export async function notifyAdmins(ctx: Context, bot: Bot, config: Config, message: string): Promise<void> {
     const logger = createLogger(ctx, 'group-control:notify')
     if (config.admin.notificationGroupId) {
@@ -125,22 +142,15 @@ export function clearGuildAdminCache(): void {
     guildAdminCache.clear()
 }
 
+/** 判定成员是否为群管理员/群主。兼容两种真实形态：
+ *   - 原始 OneBot 成员：role 为 'owner'/'admin'/'member'
+ *   - koishi GuildMember：roles 为 [{ id: 'owner'|'admin' }]（decodeGuildMember 产出） */
 function hasAdminRole(member: OneBotMember | null | undefined): boolean {
     if (!member) return false
-
-    // 兼容多种字段名：member.role / member.sender.role / member.data.role / member.member.role
-    const data = ((member as { data?: OneBotMember }).data
-        ?? (member as { member?: OneBotMember }).member
-        ?? (member as { sender?: OneBotMember }).sender
-        ?? member) as OneBotMember
-    const role = data.role ?? data.memberRole ?? data.permissions
-    if (role === 'admin' || role === 'owner' || role === 'administrator') return true
-
-    const roles = data.roles ?? data.roleIds
-    if (Array.isArray(roles)) {
-        return roles.some((roleName: string) => roleName === 'admin' || roleName === 'owner' || roleName === 'administrator')
+    if (member.role === 'owner' || member.role === 'admin') return true
+    if (Array.isArray(member.roles)) {
+        return member.roles.some(r => r.id === 'owner' || r.id === 'admin')
     }
-
     return false
 }
 
@@ -149,7 +159,7 @@ async function getOneBotGroupMemberInfo(session: Session): Promise<OneBotMember 
     const userId = toOneBotNumber(session.userId)
     if (guildId == null || userId == null) return null
     try {
-        return await asOneBotBot(session.bot).internal?.getGroupMemberInfo?.(guildId, userId, true) ?? null
+        return await asOneBotBot(session.bot).internal.getGroupMemberInfo(guildId, userId)
     } catch {
         return null
     }
@@ -207,7 +217,7 @@ export function hasGlobalPermission(session: Session, config: Config): boolean {
     return isGlobalAdmin(session, config)
 }
 
-/** 管理指令列表 - 这些指令始终不受 bot-off 影响 */
+/** 管理指令列表 - 这些指令始终不受 bot-off / 频率控制影响 */
 export const ADMIN_COMMANDS = new Set([
     'bot-on', 'bot-off', 'quit',
     'gc', 'gc.banlist', 'gc.unban', 'gc.ban', 'gc.clearban',
@@ -216,8 +226,36 @@ export const ADMIN_COMMANDS = new Set([
     'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
     'gc.friend-pending', 'gc.friend-approve', 'gc.friend-reject',
     'gc.fp', 'gc.fa', 'gc.fr',
-    'gc.debug',
+    'gc.debug', 'gc.debug.member-list', 'gc.debug.member', 'gc.debug.raw',
 ])
 
-// 兼容旧 import：让上层模块仍可写 `import { OneBotBot } from './utils'` 等。
-export type { OneBotBot } from './types'
+/** 把指令名归一化：去前缀、去引导符、转小写、下划线转连字符 */
+export function normalizeCommandName(name: string, prefixes: string[] = []): string {
+    let source = name.trim()
+    for (const prefix of prefixes.filter(Boolean).sort((a, b) => b.length - a.length)) {
+        if (source.startsWith(prefix)) {
+            source = source.slice(prefix.length)
+            break
+        }
+    }
+    return source.replace(/^[/.!！。]+/, '').toLowerCase().replace(/_/g, '-')
+}
+
+/** 收集一个 command 的所有可调用名（name / displayName / alias），归一化后返回 */
+export function getCommandNames(command: Command | undefined | null): string[] {
+    const names = new Set<string>()
+    if (!command) return []
+    if (command.name) names.add(normalizeCommandName(command.name))
+    const displayName = (command as Command & { displayName?: string }).displayName
+    if (displayName) names.add(normalizeCommandName(displayName))
+    const aliases = (command as unknown as { _aliases?: Record<string, unknown> })._aliases ?? {}
+    for (const alias of Object.keys(aliases)) {
+        names.add(normalizeCommandName(alias))
+    }
+    return [...names]
+}
+
+/** 判定一个 command 是否为管理指令（其任一名命中 ADMIN_COMMANDS） */
+export function isAdminCommand(command: Command | undefined | null): boolean {
+    return getCommandNames(command).some(commandName => ADMIN_COMMANDS.has(commandName))
+}

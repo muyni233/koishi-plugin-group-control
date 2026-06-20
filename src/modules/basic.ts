@@ -1,9 +1,9 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGuildPermission, getAdminCommandOptions } from '../utils'
+import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
-    asOneBotBot, OneBotBot, OneBotMember, OneBotGroupInfo,
+    asOneBotBot, OneBotBot, OneBotMember,
     getBotSelfId, getMemberUserId, getRawEvent, isBotMember,
 } from '../types'
 import { createLogger, errorMessage, ScopedLogger } from '../logger'
@@ -11,7 +11,7 @@ import {
     isInSmallGroupWhitelist, getPendingInvite, removePendingInvite,
     markSelfLeft, consumeSelfLeft, clearSelfLeft, clearExpiredSelfLeft,
     blacklistKicked, createBlacklistedGuild, isApprovedGuild, clearApprovedGuild,
-    getBlacklistedGuild, BLACKLIST_PLATFORM,
+    getBlacklistedGuild, getGroupBotStatus, BLACKLIST_PLATFORM,
 } from '../database'
 
 export const name = 'group-control-basic'
@@ -33,9 +33,8 @@ async function getGroupName(bot: OneBotBot, guildId: string, logger: ScopedLogge
     try {
         const groupId = toOneBotNumber(guildId)
         if (groupId != null) {
-            const info = await bot.internal?.getGroupInfo?.(groupId)
-            const data = ((info as { data?: OneBotGroupInfo } | null)?.data ?? info) as OneBotGroupInfo | null | undefined
-            if (data?.group_name) return data.group_name
+            const info = await bot.internal.getGroupInfo(groupId)
+            if (info?.group_name) return info.group_name
         }
     } catch (err) {
         logger.debug(`getGroupInfo 失败 guildId=${guildId} ${errorMessage(err)}`)
@@ -62,35 +61,11 @@ async function getGroupMemberList(bot: OneBotBot, guildId: string, logger: Scope
     try {
         const groupId = toOneBotNumber(guildId)
         if (groupId != null) {
-            // no_cache=true：强制 OneBot 实现（NapCat/LLOneBot 等）拉取最新成员列表，
-            // 否则可能拿到入群瞬间缓存的旧列表——此时 is_robot 尚未被标记/更新，
-            // 会导致「排除官方机器人」统计把官方机器人误算成真人，小群检测失效。
-            const raw = await bot.internal?.getGroupMemberList?.(groupId, true)
-            const list = Array.isArray(raw)
-                ? raw
-                : (Array.isArray((raw as { data?: OneBotMember[] } | null)?.data)
-                    ? (raw as { data: OneBotMember[] }).data
-                    : [])
-            if (list.length > 0) return list
+            return await bot.internal.getGroupMemberList(groupId)
         }
     } catch (err) {
         logger.debug(`internal.getGroupMemberList 失败 guildId=${guildId} ${errorMessage(err)}`)
     }
-
-    try {
-        const raw = await bot.getGuildMemberList?.(guildId) as
-            | OneBotMember[]
-            | { data?: OneBotMember[] }
-            | null
-            | undefined
-        if (Array.isArray(raw)) return raw
-        if (Array.isArray((raw as { data?: OneBotMember[] } | null)?.data)) {
-            return (raw as { data: OneBotMember[] }).data
-        }
-    } catch (err) {
-        logger.debug(`bot.getGuildMemberList 失败 guildId=${guildId} ${errorMessage(err)}`)
-    }
-
     return []
 }
 
@@ -110,7 +85,6 @@ export function apply(ctx: Context, config: Config) {
     const KICK_DEDUP_MS = 60 * 1000       // 60秒内同一群的踢出不重复处理
     const ADD_DEDUP_MS = 10 * 1000        // 10秒内同一群的 guild-added 视为重放
     const REALTIME_DEBOUNCE_MS = 1500     // 实时复检前的防抖（合并瞬时连续退群）
-    const WELCOME_RETRY_DELAYS = [1000, 3000, 7000]
 
     function isRecent(map: Map<string, number>, key: string, ttl: number): boolean {
         const time = map.get(key)
@@ -167,10 +141,9 @@ export function apply(ctx: Context, config: Config) {
         try {
             const groupId = toOneBotNumber(guildId)
             if (groupId != null) {
-                const info = await bot.internal?.getGroupInfo?.(groupId)
-                const data = ((info as { data?: OneBotGroupInfo } | null)?.data ?? info) as OneBotGroupInfo | null | undefined
-                total = Number(data?.member_count) || 0
-                if (data?.group_name) groupName = data.group_name
+                const info = await bot.internal.getGroupInfo(groupId)
+                total = Number(info?.member_count) || 0
+                if (info?.group_name) groupName = info.group_name
             }
         } catch (err) {
             logger.debug(`getGroupInfo 失败 guildId=${guildId} ${errorMessage(err)}`)
@@ -202,28 +175,19 @@ export function apply(ctx: Context, config: Config) {
         const list = await getGroupMemberList(bot, guildId, logger)
         logger.event('smallGroup.list', {
             guildId, total, threshold, listLength: list.length,
-        })
+        }, 'debug')
         if (list.length > 0) {
             const sample = list[0]
             logger.event('smallGroup.sample', {
                 guildId,
                 keys: Object.keys(sample ?? {}).join(','),
                 is_robot: sample?.is_robot,
-                isRobot: sample?.isRobot,
             }, 'debug')
-            // verbose 开时，打印所有成员的关键机器人标记字段，用于排查
-            logger.debug(`[smallGroup.memberDetails] guildId=${guildId} first 30 members details:`)
+            // 调试模式下打印各成员 is_robot，用于排查适配器是否正确返回该字段
+            logger.debug(`[smallGroup.memberDetails] guildId=${guildId} 共 ${list.length} 个成员（前30个）：`)
             for (let i = 0; i < Math.min(list.length, 30); i++) {
                 const m = list[i]
-                const uid = getMemberUserId(m)
-                const flags = [
-                    `is_robot=${JSON.stringify(m.is_robot)}`,
-                    `isRobot=${JSON.stringify(m.isRobot)}`,
-                    `is_bot=${JSON.stringify((m as { is_bot?: unknown }).is_bot)}`,
-                    `user.isBot=${JSON.stringify(m.user?.isBot)}`,
-                    `user.is_robot=${JSON.stringify((m.user as { is_robot?: unknown })?.is_robot)}`,
-                ].join(', ')
-                logger.debug(`  [${i}] uid=${uid} ${flags}`)
+                logger.debug(`  [${i}] uid=${getMemberUserId(m)} is_robot=${JSON.stringify(m.is_robot)}`)
             }
         }
 
@@ -272,11 +236,9 @@ export function apply(ctx: Context, config: Config) {
         const selfId = getBotSelfId(bot) ?? ''
         const dedupKey = makeGuildKey(platform, selfId, guildId)
         const threshold = config.basic.smallGroupThreshold
-        const quitMsg = config.basic.smallGroupQuitMessage
-            .replaceAll('{memberCount}', memberCount.toString())
-            .replaceAll('{threshold}', threshold.toString())
-            .replaceAll('{groupName}', groupName)
-            .replaceAll('{groupId}', guildId)
+        const quitMsg = escapeTpl(config.basic.smallGroupQuitMessage, {
+            memberCount, threshold, groupName, groupId: guildId,
+        })
         try {
             await bot.sendMessage(guildId, quitMsg, platform)
         } catch (err) {
@@ -300,32 +262,20 @@ export function apply(ctx: Context, config: Config) {
         }
     }
 
-    function sendWelcomeMessage(bot: OneBotBot, platform: string, guildId: string, message: string, shouldStop: () => boolean): void {
-        const attempt = async (attemptIndex: number): Promise<void> => {
-            if (shouldStop()) return
-
-            try {
-                await bot.sendMessage(guildId, message, platform)
-                if (attemptIndex > 0) {
-                    logger.info(`欢迎消息重试成功 guildId=${guildId} attempt=${attemptIndex + 1}`)
-                }
-            } catch (err) {
-                if (shouldStop()) return
-
-                const retryDelay = WELCOME_RETRY_DELAYS[attemptIndex]
-                if (retryDelay == null) {
-                    logger.warn(`欢迎消息发送失败（已达最大重试） guildId=${guildId} attempts=${attemptIndex + 1}`, err)
-                    return
-                }
-
-                logger.warn(`欢迎消息发送失败，${retryDelay}ms 后重试 guildId=${guildId} attempt=${attemptIndex + 1}`, err)
-                ctx.setTimeout(() => {
-                    void attempt(attemptIndex + 1)
-                }, retryDelay)
-            }
+    /** 发送欢迎消息。bot-off（群开关关闭）时不发送——事件监听器不走中间件，需在此显式判断。 */
+    async function sendWelcome(bot: OneBotBot, platform: string, guildId: string): Promise<void> {
+        if (!config.basic.welcomeMessage) return
+        // bot-off 时阻止主动欢迎（与 bot-off 文案承诺一致）
+        if (config.botSwitch?.enabled) {
+            const status = await getGroupBotStatus(ctx, platform, guildId)
+            const isBotEnabled = status ? status.botEnabled : config.botSwitch.defaultState
+            if (!isBotEnabled) return
         }
-
-        void attempt(0)
+        try {
+            await bot.sendMessage(guildId, config.basic.welcomeMessage, platform)
+        } catch (err) {
+            logger.warn(`欢迎消息发送失败 guildId=${guildId}`, err)
+        }
     }
 
     ctx.on('guild-added', async (session) => {
@@ -364,57 +314,51 @@ export function apply(ctx: Context, config: Config) {
             }
         }
 
-        // 小群自动退群检测（延迟再获取群信息以确保准确）
+        // 小群自动退群检测（延迟再获取群信息以确保准确）。
+        // 小群/黑名单群不发欢迎；豁免群（白名单/已审核/待处理邀请）直接欢迎；
+        // 未审核群先做小群检测，确认非小群后再欢迎。
         if (config.basic.smallGroupAutoQuit) {
-            // 管理员已审核通过的群或白名单内的群不受小群自动退群限制
             const inWhitelist = await isInSmallGroupWhitelist(ctx, guildId)
             const wasApproved = await isApprovedGuild(ctx, guildId, selfId)
-
-            // 检查是否有待处理的邀请记录（管理员手动通过邀请时也会有记录）
             const pendingInvite = await getPendingInvite(ctx, platform, guildId, selfId)
             const hadPendingInvite = !!pendingInvite
             if (hadPendingInvite) await removePendingInvite(ctx, platform, guildId, selfId)
 
             if (inWhitelist || wasApproved || hadPendingInvite) {
-                // 跳过小群检测
+                // 豁免：直接欢迎
+                await sendWelcome(bot, platform, guildId)
             } else {
+                // 未审核：延迟小群检测，非小群才欢迎
                 const delay = config.basic.smallGroupCheckDelay || 3000
                 ctx.setTimeout(async () => {
                     try {
                         const res = await evaluateSmallGroup(bot, guildId)
-                        let groupName = res.groupName
-                        if (groupName === '未知') groupName = await getGroupName(bot, guildId, logger)
-
                         if (res.decision === 'quit') {
+                            let groupName = res.groupName
+                            if (groupName === '未知') groupName = await getGroupName(bot, guildId, logger)
                             await performSmallGroupQuit(bot, platform, guildId, groupName, res.count)
-                        } else if (res.decision === 'keep') {
-                            // 人数达标但未经审核，通知管理员
-                            if (config.basic.smallGroupQualifiedNotifyAdmin) {
-                                const qualifiedMsg = config.basic.smallGroupQualifiedMessage
-                                    .replaceAll('{groupName}', groupName)
-                                    .replaceAll('{groupId}', guildId)
-                                    .replaceAll('{memberCount}', res.count.toString())
-                                    .replaceAll('{threshold}', config.basic.smallGroupThreshold.toString())
-                                await notifyAdmins(ctx, bot, config, qualifiedMsg)
-                            }
+                            return  // 小群：已退群，不发欢迎
+                        }
+                        if (res.decision === 'keep' && config.basic.smallGroupQualifiedNotifyAdmin) {
+                            let groupName = res.groupName
+                            if (groupName === '未知') groupName = await getGroupName(bot, guildId, logger)
+                            const qualifiedMsg = escapeTpl(config.basic.smallGroupQualifiedMessage, {
+                                groupName, groupId: guildId,
+                                memberCount: res.count,
+                                threshold: config.basic.smallGroupThreshold,
+                            })
+                            await notifyAdmins(ctx, bot, config, qualifiedMsg)
                         }
                     } catch (err) {
                         logger.error(`小群自动退群检测失败 guildId=${guildId}`, err)
                     }
+                    // keep / unknown / 检测失败：发送欢迎
+                    await sendWelcome(bot, platform, guildId)
                 }, delay)
-                // 不要 return，先正常发送欢迎消息，小群判断在延迟后执行
             }
-        }
-
-        // 发送欢迎消息
-        if (config.basic.welcomeMessage) {
-            sendWelcomeMessage(
-                bot,
-                platform,
-                guildId,
-                config.basic.welcomeMessage,
-                () => isRecent(quittingGuilds, addKey, QUITTING_EXPIRE_MS),
-            )
+        } else {
+            // 未启用小群检测：直接欢迎
+            await sendWelcome(bot, platform, guildId)
         }
     })
 
@@ -519,9 +463,9 @@ export function apply(ctx: Context, config: Config) {
         // 8) 通知管理员（独立于 enableBlacklist 的开关）
         if (config.basic.notifyAdminOnKick) {
             const groupName = await getGroupName(bot, guildId, logger)
-            const kickMsg = config.basic.kickNotificationMessage
-                .replaceAll('{groupId}', guildId)
-                .replaceAll('{groupName}', groupName)
+            const kickMsg = escapeTpl(config.basic.kickNotificationMessage, {
+                groupId: guildId, groupName,
+            })
             await notifyAdmins(ctx, bot, config, kickMsg)
         }
     })
@@ -546,11 +490,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 被禁言时长达到阈值：自动退群并拉黑（优先于普通通知）
             if (config.basic.muteAutoQuit && duration >= config.basic.muteAutoQuitThreshold) {
-                const quitMsg = config.basic.muteQuitNotificationMessage
-                    .replaceAll('{groupId}', guildId)
-                    .replaceAll('{groupName}', groupName)
-                    .replaceAll('{operatorId}', operatorId)
-                    .replaceAll('{duration}', duration.toString())
+                const quitMsg = escapeTpl(config.basic.muteQuitNotificationMessage, {
+                    groupId: guildId, groupName, operatorId, duration,
+                })
                 await notifyAdmins(ctx, bot, config, quitMsg)
 
                 // 拉入黑名单（reason='muted'，避免被 guild-removed 当作被踢重复处理）
@@ -576,11 +518,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 普通被禁言通知
             if (config.basic.notifyAdminOnMute) {
-                const msg = config.basic.muteNotificationMessage
-                    .replaceAll('{groupId}', guildId)
-                    .replaceAll('{groupName}', groupName)
-                    .replaceAll('{operatorId}', operatorId)
-                    .replaceAll('{duration}', duration.toString())
+                const msg = escapeTpl(config.basic.muteNotificationMessage, {
+                    groupId: guildId, groupName, operatorId, duration,
+                })
                 await notifyAdmins(ctx, bot, config, msg)
             }
         })
@@ -618,7 +558,7 @@ export function apply(ctx: Context, config: Config) {
                 quittingGuilds.set(dedupKey, Date.now())
                 await markSelfLeft(ctx, guildId, selfId)
                 try {
-                    await bot.sendMessage(session.guildId, config.basic.quitMessage.replaceAll('{userId}', userId), platform)
+                    await bot.sendMessage(session.guildId, escapeTpl(config.basic.quitMessage, { userId }), platform)
                 } catch (err) {
                     logger.debug(`quit 群内提示发送失败 guildId=${guildId} ${errorMessage(err)}`)
                 }

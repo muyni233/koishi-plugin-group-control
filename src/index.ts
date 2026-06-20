@@ -1,4 +1,4 @@
-import { Context } from 'koishi'
+import { Context, h } from 'koishi'
 import { Config } from './config'
 import * as database from './database'
 import * as basic from './modules/basic'
@@ -20,6 +20,16 @@ export const inject = ['database']
 export function apply(ctx: Context, config: Config) {
   ctx.on('dispose', () => {
     clearGuildAdminCache()
+  })
+
+  // koishi help 插件在指令详情标题里直接拼接未转义的 command.declaration（形如 ` <groupId>`），
+  // OneBot 适配器会把 `<groupId>` 当作消息元素标签吞掉，导致用法提示里参数不可见。
+  // 这里转义标题中的尖括号片段。
+  ctx.on('help/command', (output, command) => {
+    const title = output[0]
+    if (typeof title === 'string' && command.declaration) {
+      output[0] = title.replace(/<[^<>]*>/g, (m) => h.escape(m))
+    }
   })
 
   ctx.plugin(database)

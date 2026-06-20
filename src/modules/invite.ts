@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { hasGlobalPermission, notifyAdmins, getAdminCommandOptions } from '../utils'
+import { hasGlobalPermission, notifyAdmins, getAdminCommandOptions, escapeTpl } from '../utils'
 import { parseGuildId } from '../utils-id'
 import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
@@ -153,11 +153,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 通知邀请者已自动通过
             try {
-                const approveMessage = config.invite.inviteApproveMessage
-                    .replaceAll('{groupName}', groupName)
-                    .replaceAll('{groupId}', groupId)
-                    .replaceAll('{userName}', userName)
-                    .replaceAll('{userId}', userId)
+                const approveMessage = escapeTpl(config.invite.inviteApproveMessage, {
+                    groupName, groupId, userName, userId,
+                })
                 await bot.sendPrivateMessage(userId, approveMessage)
             } catch (err) {
                 logger.warn(`发送自动通过提示失败 userId=${userId}`, err)
@@ -165,11 +163,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 通知管理员
             if (config.invite.notifyAdminOnApprove) {
-                const notifyMessage = config.invite.inviteApproveNotificationMessage
-                    .replaceAll('{groupName}', groupName)
-                    .replaceAll('{groupId}', groupId)
-                    .replaceAll('{userName}', userName)
-                    .replaceAll('{userId}', userId)
+                const notifyMessage = escapeTpl(config.invite.inviteApproveNotificationMessage, {
+                    groupName, groupId, userName, userId,
+                })
                 await notifyAdmins(ctx, bot, config, notifyMessage)
             }
             return
@@ -179,11 +175,9 @@ export function apply(ctx: Context, config: Config) {
 
         // 发送等待审核提示给邀请者
         try {
-            const waitMessage = config.invite.inviteWaitMessage
-                .replaceAll('{groupName}', groupName)
-                .replaceAll('{groupId}', groupId)
-                .replaceAll('{userName}', userName)
-                .replaceAll('{userId}', userId)
+            const waitMessage = escapeTpl(config.invite.inviteWaitMessage, {
+                groupName, groupId, userName, userId,
+            })
 
             await bot.sendPrivateMessage(userId, waitMessage)
         } catch (err) {
@@ -205,11 +199,9 @@ export function apply(ctx: Context, config: Config) {
             flag,
         })
 
-        const requestMessage = config.invite.inviteRequestMessage
-            .replaceAll('{groupName}', groupName)
-            .replaceAll('{groupId}', groupId)
-            .replaceAll('{userName}', userName)
-            .replaceAll('{userId}', userId)
+        const requestMessage = escapeTpl(config.invite.inviteRequestMessage, {
+            groupName, groupId, userName, userId,
+        })
 
         await notifyAdmins(ctx, bot, config, requestMessage)
         logger.debug('已发送群邀请审核通知')

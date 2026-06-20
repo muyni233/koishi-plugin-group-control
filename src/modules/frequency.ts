@@ -1,8 +1,9 @@
-import { Context, Session } from 'koishi'
+import { Command, Context, Session } from 'koishi'
 import { Config } from '../config'
 import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequencyRecord } from '../database'
 import { parseGuildId } from '../utils-id'
 import { createLogger, errorMessage } from '../logger'
+import { escapeTpl, isAdminCommand } from '../utils'
 
 export const name = 'group-control-frequency'
 
@@ -182,7 +183,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'new-blocked') {
                 try {
-                    await session.send(freq.blockMsg.replace('{duration}', r.dur.toString()))
+                    await session.send(escapeTpl(freq.blockMsg, { duration: r.dur }))
                 } catch (err) {
                     logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -190,7 +191,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'blocked') {
                 try {
-                    await session.send(freq.blockedMsg.replace('{time}', r.remaining.toString()))
+                    await session.send(escapeTpl(freq.blockedMsg, { time: r.remaining }))
                 } catch (err) {
                     logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -222,7 +223,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'new-blocked') {
                 try {
-                    await session.bot.sendMessage(guildId, freq.blockMsg.replace('{duration}', r.dur.toString()), platform)
+                    await session.bot.sendMessage(guildId, escapeTpl(freq.blockMsg, { duration: r.dur }), platform)
                 } catch (err) {
                     logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -230,7 +231,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'blocked') {
                 try {
-                    await session.bot.sendMessage(guildId, freq.blockedMsg.replace('{time}', r.remaining.toString()), platform)
+                    await session.bot.sendMessage(guildId, escapeTpl(freq.blockedMsg, { time: r.remaining }), platform)
                 } catch (err) {
                     logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -246,6 +247,8 @@ export function apply(ctx: Context, config: Config) {
         const session = argv.session
         if (!session) return
         if (isSystemSession(session)) return
+        // 管理指令始终不受频率控制（与 bot-off 豁免保持一致）
+        if (isAdminCommand(argv.command)) return
         // 若该消息已在中间件阶段计数（私聊指令 / @bot 指令），此处不再重复计数
         if (countedSessions.has(session)) return
         const allowed = await checkFrequency(session)
@@ -256,6 +259,9 @@ export function apply(ctx: Context, config: Config) {
     ctx.middleware(async (session, next) => {
         if (isSystemSession(session)) return next()
         if (!isUserInitiatedNonCommand(session)) return next()
+        // 管理指令不计入频率（argv.command 可能尚未解析，尽力判断）
+        const argvCommand = (session as Session & { argv?: { command?: Command } }).argv?.command
+        if (argvCommand && isAdminCommand(argvCommand)) return next()
         // 标记该消息已计数，使后续 command/before-execute 跳过，避免双重消耗
         countedSessions.add(session)
         const allowed = await checkFrequency(session)

@@ -1,13 +1,15 @@
-import { Bot, Session } from 'koishi'
+import { Bot, Command, Session } from 'koishi'
 import { parseGuildId } from './utils-id'
 
 /**
- * 声明 OneBot 适配器扩展的非标准事件，使 ctx.on('guild-member-mute', ...) 无需 as any。
- * 该事件由 koishi-plugin-adapter-onebot 在 bot 被禁言时派发，satori 标准 Events 里没有。
+ * 声明非标准事件，使 ctx.on(...) 无需 as any：
+ *   - guild-member-mute：由 koishi-plugin-adapter-onebot 在 bot 被禁言时派发。
+ *   - help/command：由 koishi help 插件在渲染指令详情时派发，参数为 (output, command, session)。
  */
 declare module '@satorijs/core' {
     interface Events {
         'guild-member-mute'(session: Session): void
+        'help/command'(output: string[], command: Command, session: Session): void
     }
 }
 
@@ -22,28 +24,22 @@ declare module '@satorijs/core' {
  * 兼容不同 OneBot 实现（NapCat / LLOneBot / Lagrange / go-cqhttp 等）。
  */
 
-/** OneBot 群成员信息（get_group_member_list 返回项 / get_group_member_info） */
+/** OneBot 群成员信息（get_group_member_list 返回项 / get_group_member_info）。
+ *  兼容 koishi GuildMember 形态：roles 为 [{ id }]（decodeGuildMember 产出）。 */
 export interface OneBotMember {
     user_id?: number | string
     nickname?: string
     card?: string
     role?: 'owner' | 'admin' | 'member'
     is_robot?: boolean
-    // 部分非主流实现使用的字段名
     userId?: number | string
-    isRobot?: boolean
     user?: {
         id?: number | string
-        isBot?: boolean
     }
     sender?: {
         role?: string
     }
-    // role 的备选字段（不同适配器命名差异，保留宽松）
-    memberRole?: string
-    permissions?: string
-    roles?: string[]
-    roleIds?: string[]
+    roles?: { id: string }[]
 }
 
 /** OneBot 群信息（get_group_info） */
@@ -84,32 +80,33 @@ export interface OneBotForwardNode {
     }
 }
 
-/** OneBot internal API 子集（仅声明本插件用到的方法） */
+/** OneBot internal API 子集（仅声明本插件用到的方法）。
+ *
+ * 返回类型按 koishi adapter-onebot 的实际行为声明：其 Internal._get 直接返回
+ * response.data（已解包），故这里都是裸对象/数组，不再兼容 `{ data: ... }` 包裹。 */
 export interface OneBotInternal {
     setGroupLeave(groupId: number | string): Promise<unknown>
-    getGroupInfo(groupId: number | string): Promise<OneBotGroupInfo | { data?: OneBotGroupInfo } | null>
-    getGroupMemberList(
-        groupId: number | string,
-        noCache?: boolean,
-    ): Promise<OneBotMember[] | { data?: OneBotMember[] } | null>
-    getGroupMemberInfo(
-        groupId: number | string,
-        userId: number | string,
-        noCache?: boolean,
-    ): Promise<OneBotMember | null>
-    getStrangerInfo(userId: number | string): Promise<OneBotStrangerInfo | null>
+    getGroupInfo(groupId: number | string): Promise<OneBotGroupInfo>
+    getGroupMemberList(groupId: number | string, noCache?: boolean): Promise<OneBotMember[]>
+    getGroupMemberInfo(groupId: number | string, userId: number | string, noCache?: boolean): Promise<OneBotMember>
+    getStrangerInfo(userId: number | string): Promise<OneBotStrangerInfo>
     setFriendAddRequest(flag: string, approve: boolean, remark?: string): Promise<unknown>
     setGroupAddRequest(flag: string, type: 'add' | 'invite', approve: boolean, reason?: string): Promise<unknown>
-    sendGroupForwardMsg(groupId: number | string, messages: OneBotForwardNode[]): Promise<unknown>
-    sendPrivateForwardMsg(userId: number | string, messages: OneBotForwardNode[]): Promise<unknown>
-    getFriendList(): Promise<OneBotFriend[] | { data?: OneBotFriend[] } | null>
-    getGroupList(): Promise<OneBotGroupInfo[] | { data?: OneBotGroupInfo[] } | null>
-    deleteFriend(arg: number | { user_id: number; friend_id?: number; temp_block?: boolean; both_del?: boolean }): Promise<unknown>
+    sendGroupForwardMsg?(groupId: number | string, messages: OneBotForwardNode[]): Promise<unknown>
+    sendPrivateForwardMsg?(userId: number | string, messages: OneBotForwardNode[]): Promise<unknown>
+    getFriendList(): Promise<OneBotFriend[]>
+    getGroupList(): Promise<OneBotGroupInfo[]>
+    deleteFriend?(arg: number | { user_id: number; friend_id?: number; temp_block?: boolean; both_del?: boolean }): Promise<unknown>
 }
 
 /**
- * koishi `Bot` 在 OneBot 协议下的窄化视图。`internal` 在 koishi 类型里是 any，
- * 这里替换为本文件定义的 OneBotInternal，使所有 internal 调用获得类型检查。
+ * koishi `Bot` 在 OneBot 协议下的窄化视图。
+ *
+ * 注意：koishi 的 Bot 类声明了 `internal: any`，而 `any & T` 在 TS 里仍是 any，
+ * 所以这里的 `internal` 在类型层面仍会被当成 any——这是 koishi 类型 + 本仓库 monorepo
+ * 重复依赖（cordis/minato 双副本）的共同限制，无法用 Omit 安全覆盖（会触发
+ * Bot<koishi Context> 与 Bot<cordis Context> 的结构比较冲突）。
+ * 因此 internal 的精确形状靠 OneBotInternal 接口文档化 + 调用点按需 `as` 断言保证。
  */
 export type OneBotBot = Bot & { internal: OneBotInternal }
 
@@ -133,17 +130,11 @@ export interface OneBotRawEvent {
 
 /**
  * 从 koishi Session 中提取 OneBot 原始事件数据。
- *
- * koishi 不在公共类型里暴露原始事件，但 satori event 一般会把它放在 `_data` 上，
- * 老版本 / 备用路径还可能在 session.original / session.onebot。
- * 这里统一兜底，调用方拿到的就是 OneBotRawEvent，再从中读 sub_type / flag / user_id 等。
+ * OneBot 适配器收到事件后调用 session.setInternal('onebot', data)，
+ * 原始 payload 即挂在 session.event._data 上——这是唯一的挂载点。
  */
 export function getRawEvent(session: Session): OneBotRawEvent {
-    const event = session.event as { _data?: OneBotRawEvent } | undefined
-    const fromData = event?._data
-    if (fromData) return fromData
-    const sessionAny = session as unknown as { original?: OneBotRawEvent; raw?: OneBotRawEvent; onebot?: OneBotRawEvent }
-    return sessionAny.original ?? sessionAny.raw ?? sessionAny.onebot ?? {}
+    return (session.event as { _data?: OneBotRawEvent } | undefined)?._data ?? {}
 }
 
 /** 取 bot 的纯数字 selfId（剥掉 platform: 前缀）。无法识别返回 null。 */
@@ -161,39 +152,9 @@ export function getMemberUserId(m: OneBotMember | null | undefined): string {
     return parseGuildId(String(raw)) ?? String(raw)
 }
 
-function isTruthyRobotFlag(v: unknown): boolean {
-    if (v === true || v === 1 || v === '1') return true
-    if (typeof v === 'string' && v.toLowerCase() === 'true') return true
-    return false
-}
-
-/** 判定一个群成员是否应被视为「机器人」：QQ 官方机器人 (is_robot) 或 bot 自身。
- *
- * 极度宽松的字段兼容：
- *   - 字段名：is_robot/isRobot/is_bot/isBot、user.isBot/user.is_robot 等；
- *   - 值类型：boolean true/1/"1"/"true" 大小写不敏感；
- *   - 字段层级：顶级、或嵌套在 data/member/sender 下的都会扫一遍。
- */
+/** 判定一个群成员是否应被视为「机器人」：QQ 官方机器人 (is_robot) 或 bot 自身。仅认 is_robot 字段。 */
 export function isBotMember(m: OneBotMember | null | undefined, selfId: string | null): boolean {
     if (!m) return false
     if (selfId && getMemberUserId(m) === selfId) return true
-
-    // 兼容嵌套层级（常见适配器套一层 data/member/sender）
-    const targets = [
-        m,
-        (m as { data?: OneBotMember }).data,
-        (m as { member?: OneBotMember }).member,
-        (m as { sender?: OneBotMember }).sender,
-        m.user,
-    ]
-
-    for (const t of targets) {
-        if (!t) continue
-        if (isTruthyRobotFlag((t as { is_robot?: unknown }).is_robot)) return true
-        if (isTruthyRobotFlag((t as { isRobot?: unknown }).isRobot)) return true
-        if (isTruthyRobotFlag((t as { is_bot?: unknown }).is_bot)) return true
-        if (isTruthyRobotFlag((t as { isBot?: unknown }).isBot)) return true
-        if (isTruthyRobotFlag((t as { is_robot?: unknown }).is_robot)) return true
-    }
-    return false
+    return m.is_robot === true
 }

@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGlobalPermission, getAdminCommandOptions } from '../utils'
+import { notifyAdmins, hasGlobalPermission, getAdminCommandOptions, escapeTpl } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import { asOneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
@@ -48,7 +48,7 @@ export function apply(ctx: Context, config: Config) {
         let nickname = userId
         try {
             const userNumber = toOneBotNumber(userId)
-            const info = userNumber == null ? null : await bot.internal?.getStrangerInfo?.(userNumber)
+            const info = userNumber == null ? null : await bot.internal.getStrangerInfo(userNumber)
             nickname = info?.nickname || nickname
         } catch (err) {
             logger.debug(`getStrangerInfo 失败 userId=${userId} ${errorMessage(err)}`)
@@ -57,12 +57,11 @@ export function apply(ctx: Context, config: Config) {
         // 自动通过
         if (config.friend.autoApprove) {
             try {
-                await bot.internal?.setFriendAddRequest?.(flag, true, '')
+                await bot.internal.setFriendAddRequest(flag, true, '')
                 if (config.friend.notifyAdminOnApprove) {
-                    const msg = config.friend.approveNotificationMessage
-                        .replaceAll('{userId}', userId)
-                        .replaceAll('{nickname}', nickname)
-                        .replaceAll('{comment}', comment)
+                    const msg = escapeTpl(config.friend.approveNotificationMessage, {
+                        userId, nickname, comment,
+                    })
                     await notifyAdmins(ctx, bot, config, msg)
                 }
             } catch (err) {
@@ -77,10 +76,9 @@ export function apply(ctx: Context, config: Config) {
         })
 
         // 通知管理员
-        const msg = config.friend.requestMessage
-            .replaceAll('{userId}', userId)
-            .replaceAll('{nickname}', nickname)
-            .replaceAll('{comment}', comment)
+        const msg = escapeTpl(config.friend.requestMessage, {
+            userId, nickname, comment,
+        })
         await notifyAdmins(ctx, bot, config, msg)
     })
 
@@ -119,7 +117,7 @@ export function apply(ctx: Context, config: Config) {
             const record = await getPendingFriendRequest(ctx, session.platform, selfId, userId)
             if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
             try {
-                await bot.internal?.setFriendAddRequest?.(record.flag, true, '')
+                await bot.internal.setFriendAddRequest(record.flag, true, '')
                 await removePendingFriendRequest(ctx, session.platform, selfId, userId)
                 return `已同意 ${record.nickname}（${userId}）的好友申请。`
             } catch (err) {
@@ -141,7 +139,7 @@ export function apply(ctx: Context, config: Config) {
             const record = await getPendingFriendRequest(ctx, session.platform, selfId, userId)
             if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
             try {
-                await bot.internal?.setFriendAddRequest?.(record.flag, false, '')
+                await bot.internal.setFriendAddRequest(record.flag, false, '')
                 await removePendingFriendRequest(ctx, session.platform, selfId, userId)
                 return `已拒绝 ${record.nickname}（${userId}）的好友申请。`
             } catch (err) {

@@ -1,40 +1,12 @@
 import { Context, Command, Session } from 'koishi'
 import { Config } from '../config'
 import { getGroupBotStatus, setGroupBotStatus } from '../database'
-import { hasGuildPermission, ADMIN_COMMANDS } from '../utils'
+import { hasGuildPermission, ADMIN_COMMANDS, normalizeCommandName, getCommandNames, isAdminCommand } from '../utils'
 import { createLogger } from '../logger'
 
 export const name = 'group-control-switch'
 
 const SCOPE = 'group-control:switch'
-
-function normalizeCommandName(name: string, prefixes: string[] = []): string {
-    let source = name.trim()
-    for (const prefix of prefixes.filter(Boolean).sort((a, b) => b.length - a.length)) {
-        if (source.startsWith(prefix)) {
-            source = source.slice(prefix.length)
-            break
-        }
-    }
-    return source.replace(/^[/.!！。]+/, '').toLowerCase().replace(/_/g, '-')
-}
-
-function getCommandNames(command: Command | undefined | null): string[] {
-    const names = new Set<string>()
-    if (!command) return []
-    if (command.name) names.add(normalizeCommandName(command.name))
-    const displayName = (command as Command & { displayName?: string }).displayName
-    if (displayName) names.add(normalizeCommandName(displayName))
-    const aliases = (command as unknown as { _aliases?: Record<string, unknown> })._aliases ?? {}
-    for (const alias of Object.keys(aliases)) {
-        names.add(normalizeCommandName(alias))
-    }
-    return [...names]
-}
-
-function isAdminCommand(command: Command | undefined | null): boolean {
-    return getCommandNames(command).some(commandName => ADMIN_COMMANDS.has(commandName))
-}
 
 function getCommandPrefixes(ctx: Context, session: Session): string[] {
     const rootConfigPrefix = (ctx.root.config as { prefix?: string | string[] | ((s: Session) => string | string[]) }).prefix
