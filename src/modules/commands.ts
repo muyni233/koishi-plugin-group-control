@@ -2,8 +2,8 @@ import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import { isBlacklistEnabled, hasGlobalPermission, getAdminCommandOptions } from '../utils'
 import { parseGuildId, toOneBotNumber, formatDate } from '../utils-id'
-import { asOneBotBot, getBotSelfId, OneBotForwardNode, OneBotFriend, OneBotGroupInfo } from '../types'
-import { createLogger, errorMessage } from '../logger'
+import { asOneBotBot, getBotSelfId, OneBotForwardNode, OneBotFriend, OneBotGroupInfo, OneBotMember } from '../types'
+import { createLogger, errorMessage, isVerbose } from '../logger'
 import {
     getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
     addToSmallGroupWhitelist, removeFromSmallGroupWhitelist, getAllSmallGroupWhitelist, isInSmallGroupWhitelist,
@@ -251,4 +251,94 @@ export function apply(ctx: Context, config: Config) {
                 return `退出群 ${guildId} 失败：${errorMessage(err)}`
             }
         })
+
+    // ======== 调试：OneBot 接口测试（仅调试模式可用）========
+    // 用于排查小群「排除官方机器人」检测为何失效：直接调用 OneBot internal 接口，
+    // 把原始返回打印出来，跟手测 API 的结果对照，定位 is_robot 字段缺失/失真的根因。
+    // 仅当 logging.verbose（调试模式）开启时注册，避免误用与信息泄露。
+    if (isVerbose(config)) {
+        const debugCmd = ctx.command('gc.debug <action:string> [arg1:text]', '调试：测试 OneBot 接口返回（仅调试模式）', cmdOpts)
+            .action(async ({ session }, action, arg1) => {
+                if (!session) return ''
+                if (!hasGlobalPermission(session, config)) return '权限不足。'
+                if (!action) return '用法：\n  gc.debug member-list <群号>\n  gc.debug member <群号> <QQ>\n  gc.debug raw <群号>'
+                const bot = asOneBotBot(session.bot)
+
+                if (action === 'member-list') {
+                    const groupId = toOneBotNumber(arg1)
+                    if (groupId == null) return '请指定有效的群号。用法：gc.debug member-list <群号>'
+                    return await debugMemberList(bot, groupId)
+                }
+
+                if (action === 'member') {
+                    const parts = String(arg1 ?? '').split(/\s+/).filter(Boolean)
+                    const groupId = toOneBotNumber(parts[0])
+                    const userId = toOneBotNumber(parts[1])
+                    if (groupId == null || userId == null) return '用法：gc.debug member <群号> <QQ>'
+                    return await debugMember(bot, groupId, userId)
+                }
+
+                if (action === 'raw') {
+                    const groupId = toOneBotNumber(arg1)
+                    if (groupId == null) return '请指定有效的群号。用法：gc.debug raw <群号>'
+                    return await debugRawMemberList(bot, groupId, session)
+                }
+
+                return `未知子指令：${action}。可用：member-list / member / raw`
+            })
+        void debugCmd
+    }
+}
+
+/** debug member-list：对比 no_cache=true 与不传 no_cache 两次调用的 is_robot 分布 */
+async function debugMemberList(bot: ReturnType<typeof asOneBotBot>, groupId: number): Promise<string> {
+    const lines: string[] = [`[member-list] group=${groupId}`]
+    for (const [label, noCache] of [['no_cache=true', true], ['no_cache=false', false]] as const) {
+        try {
+            const raw = await bot.internal?.getGroupMemberList?.(groupId, noCache)
+            const list = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] } | null)?.data ?? [])
+            const members = list as OneBotMember[]
+            const robots = members.filter(m => (m as { is_robot?: unknown }).is_robot === true).length
+            const first5 = members.slice(0, 5).map(m => {
+                const uid = m.user_id ?? m.userId ?? '?'
+                const name = m.nickname ?? m.card ?? ''
+                return `${uid}(${name}) is_robot=${JSON.stringify((m as { is_robot?: unknown }).is_robot)}`
+            })
+            lines.push(`\n== ${label} ==`)
+            lines.push(`总数=${members.length} is_robot=true 数=${robots}`)
+            lines.push('前5个成员：')
+            lines.push(...first5.map(s => '  ' + s))
+        } catch (err) {
+            lines.push(`\n== ${label} == 调用失败：${errorMessage(err)}`)
+        }
+    }
+    return lines.join('\n')
+}
+
+/** debug member：单个成员的完整原始字段（带 no_cache） */
+async function debugMember(bot: ReturnType<typeof asOneBotBot>, groupId: number, userId: number): Promise<string> {
+    try {
+        const member = await bot.internal?.getGroupMemberInfo?.(groupId, userId, true)
+        return `[member] group=${groupId} user=${userId}\n${JSON.stringify(member, null, 2)}`
+    } catch (err) {
+        return `调用失败：${errorMessage(err)}`
+    }
+}
+
+/** debug raw：原始成员列表前若干项的完整 JSON（合并转发，避免单条过长） */
+async function debugRawMemberList(bot: ReturnType<typeof asOneBotBot>, groupId: number, session: Session): Promise<string> {
+    try {
+        const raw = await bot.internal?.getGroupMemberList?.(groupId, true)
+        const list = Array.isArray(raw) ? raw : ((raw as { data?: unknown[] } | null)?.data ?? [])
+        const members = list as OneBotMember[]
+        const lines = [
+            `[raw] group=${groupId} 共 ${members.length} 个成员（仅展示前 10 个的完整字段）`,
+            ...members.slice(0, 10).map((m, i) => `--- #${i} ---\n${JSON.stringify(m, null, 2)}`),
+        ]
+        // 单条消息可能超长，走合并转发；失败则降级分段
+        await sendAsForward(session, `debug raw group=${groupId}`, lines)
+        return ''
+    } catch (err) {
+        return `调用失败：${errorMessage(err)}`
+    }
 }

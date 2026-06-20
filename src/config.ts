@@ -202,7 +202,7 @@ export const Config: Schema<Config> = Schema.intersect([
     }),
     Schema.object({
         logging: Schema.object({
-            verbose: Schema.boolean().default(false).description('显示详细日志'),
+            verbose: Schema.boolean().default(false).description('调试模式：开启后输出 debug 级别日志，并启用 gc.debug 接口测试指令'),
         }).description('日志配置'),
     }),
 ]) as Schema<Config>

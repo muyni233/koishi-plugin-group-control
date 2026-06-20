@@ -216,6 +216,7 @@ export const ADMIN_COMMANDS = new Set([
     'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
     'gc.friend-pending', 'gc.friend-approve', 'gc.friend-reject',
     'gc.fp', 'gc.fa', 'gc.fr',
+    'gc.debug',
 ])
 
 // 兼容旧 import：让上层模块仍可写 `import { OneBotBot } from './utils'` 等。

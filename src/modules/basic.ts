@@ -62,7 +62,10 @@ async function getGroupMemberList(bot: OneBotBot, guildId: string, logger: Scope
     try {
         const groupId = toOneBotNumber(guildId)
         if (groupId != null) {
-            const raw = await bot.internal?.getGroupMemberList?.(groupId)
+            // no_cache=true：强制 OneBot 实现（NapCat/LLOneBot 等）拉取最新成员列表，
+            // 否则可能拿到入群瞬间缓存的旧列表——此时 is_robot 尚未被标记/更新，
+            // 会导致「排除官方机器人」统计把官方机器人误算成真人，小群检测失效。
+            const raw = await bot.internal?.getGroupMemberList?.(groupId, true)
             const list = Array.isArray(raw)
                 ? raw
                 : (Array.isArray((raw as { data?: OneBotMember[] } | null)?.data)
