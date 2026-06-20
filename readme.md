@@ -74,7 +74,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `smallGroupExcludeOfficialBots` | `true` | 统计群人数时排除 QQ 官方机器人（`is_robot`）及机器人自身，仅统计真人成员 |
 | `smallGroupRealtimeMonitor` | `true` | 实时监控群人数：监听成员退群事件，群缩小到阈值以下时自动退群（仅监控未经审核拉入的群） |
 | `smallGroupRecheckCooldown` | `60` | 实时监控时同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调用接口 |
-| `smallGroupRobotUinRangeMode` | `false` | 调试用：改用 `get_robot_uin_range` 号段区间判定官方机器人（适配器 `is_robot` 字段失效时启用，接口不可用或调用失败时自动回退 `is_robot`） |
 | `smallGroupQuitMessage` | *(见配置)* | 退群提示，支持 `{memberCount}`, `{threshold}`, `{groupName}`, `{groupId}` |
 | `smallGroupNotifyAdmin` | `true` | 自动退群时通知管理员 |
 | `smallGroupCheckDelay` | `3000` | 加入后延迟检测的时间（毫秒） |
@@ -165,6 +164,13 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `enabled` | `true` | 启用群聊 bot 开关功能 |
 | `defaultState` | `true` | 默认开启状态 |
 | `disabledMessage` | *(见配置)* | 关闭状态下被 @ 时的提示 |
+
+### 日志与调试
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `verbose` | `false` | 调试模式：开启后输出 debug 级别日志，并启用 `gc.debug` 接口测试指令 |
+| `smallGroupRobotUinRangeMode` | `false` | 调试用：小群检测改用 `get_robot_uin_range` 号段区间判定官方机器人（适配器 `is_robot` 字段失效时启用，接口不可用或调用失败时自动回退 `is_robot`） |
 
 ---
 

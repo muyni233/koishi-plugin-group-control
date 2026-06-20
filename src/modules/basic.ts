@@ -3,7 +3,7 @@ import { Config } from '../config'
 import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
-    asOneBotBot, OneBotBot, OneBotMember,
+    asOneBotBot, OneBotBot, OneBotInternalRaw, OneBotMember,
     getBotSelfId, getMemberUserId, getRawEvent,
 } from '../types'
 import { createLogger, errorMessage, ScopedLogger } from '../logger'
@@ -119,20 +119,20 @@ export function apply(ctx: Context, config: Config) {
     const robotUinRangeCache = new Map<string, { min: number; max: number }[] | null>()
 
     /** 获取官方机器人号段区间。返回 null 表示接口不可用/调用失败（调用方应回退 is_robot）。
-     *  null 会被缓存以避免反复调用不可用的接口。 */
+     *  null 会被缓存以避免反复调用不可用的接口。
+     *
+     *  get_robot_uin_range 是非标准接口，adapter-onebot 没有为它生成封装方法，
+     *  故通过底层 _get 通道直接调用（标准方法内部同样走 _get）。 */
     async function getRobotUinRanges(bot: OneBotBot): Promise<{ min: number; max: number }[] | null> {
         const selfId = getBotSelfId(bot) ?? ''
         const cacheKey = selfId || '_default'
         if (robotUinRangeCache.has(cacheKey)) return robotUinRangeCache.get(cacheKey) ?? null
         let ranges: { min: number; max: number }[] | null = null
         try {
-            if (typeof bot.internal.getRobotUinRange === 'function') {
-                const raw = await bot.internal.getRobotUinRange()
-                ranges = parseRobotUinRanges(raw)
-                if (!ranges) logger.debug('get_robot_uin_range 返回无法解析的号段数据，回退 is_robot')
-            } else {
-                logger.debug('当前适配器不支持 get_robot_uin_range 接口，回退 is_robot')
-            }
+            const internal = bot.internal as OneBotInternalRaw
+            const raw = await internal._get('get_robot_uin_range')
+            ranges = parseRobotUinRanges(raw)
+            if (!ranges) logger.debug('get_robot_uin_range 返回无法解析的号段数据，回退 is_robot')
         } catch (err) {
             logger.debug(`get_robot_uin_range 调用失败，回退 is_robot ${errorMessage(err)}`)
         }
@@ -268,7 +268,7 @@ export function apply(ctx: Context, config: Config) {
         // （适配器 is_robot 字段失效时的临时方案）。号段拿不到则回退 is_robot。
         let robotRanges: { min: number; max: number }[] | null = null
         let useRangeMode = false
-        if (config.basic.smallGroupRobotUinRangeMode) {
+        if (config.logging.smallGroupRobotUinRangeMode) {
             robotRanges = await getRobotUinRanges(bot)
             useRangeMode = robotRanges !== null
             if (useRangeMode) {

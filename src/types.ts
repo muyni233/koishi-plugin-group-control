@@ -97,9 +97,21 @@ export interface OneBotInternal {
     getFriendList(): Promise<OneBotFriend[]>
     getGroupList(): Promise<OneBotGroupInfo[]>
     deleteFriend?(arg: number | { user_id: number; friend_id?: number; temp_block?: boolean; both_del?: boolean }): Promise<unknown>
-    /** get_robot_uin_range：获取 QQ 官方机器人 QQ 号区间（非标准接口，仅部分实现支持）。
-     *  返回 data 为 { minUin, maxUin } 区间数组（字符串形式）。 */
-    getRobotUinRange?(): Promise<unknown>
+}
+
+/**
+ * 带底层 _get 通道的 OneBotInternal 视图。
+ *
+ * adapter-onebot 的 Internal 用 `_get(action, params)` 作为底层请求通道：所有标准方法
+ * （getGroupInfo 等）都是经 Internal.define 动态挂到 prototype 上、内部调用 _get 实现的。
+ * 因此非标准接口（如 get_robot_uin_range）没有对应的封装方法，必须直接调 _get。
+ *
+ * _get 在 adapter 类型里被标为 private，但运行时确实存在于 internal 原型上，
+ * 这里通过接口声明重新暴露（与本项目「收敛 OneBot 私有形状」的既有思路一致）。
+ * HTTP 方法（GET/POST）由 adapter 的 _request 统一处理，调用方无需关心。
+ */
+export interface OneBotInternalRaw extends OneBotInternal {
+    _get(action: string, params?: Record<string, unknown>): Promise<unknown>
 }
 
 /**

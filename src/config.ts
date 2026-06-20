@@ -21,7 +21,6 @@ export interface GroupConfig {
     smallGroupQualifiedMessage: string
     smallGroupRealtimeMonitor: boolean
     smallGroupRecheckCooldown: number
-    smallGroupRobotUinRangeMode: boolean
     // —— 被禁言处理 ——
     notifyAdminOnMute: boolean
     muteNotificationMessage: string
@@ -90,6 +89,7 @@ export interface PermissionConfig {
 
 export interface LoggingConfig {
     verbose: boolean
+    smallGroupRobotUinRangeMode: boolean
 }
 
 export interface Config {
@@ -142,7 +142,6 @@ export const Config: Schema<Config> = Schema.intersect([
             smallGroupQualifiedMessage: Schema.string().role('textarea').default('机器人被未经审核地拉入群聊\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）\n请确认是否保留。').description('合格小群通知模板，支持变量 {groupName}, {groupId}, {memberCount}, {threshold}'),
             smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控：监听成员退群事件，群缩小到阈值以下时再次自动退群'),
             smallGroupRecheckCooldown: Schema.natural().default(60).description('实时监控：同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调接口'),
-            smallGroupRobotUinRangeMode: Schema.boolean().default(false).description('调试用：改用 get_robot_uin_range 号段区间判定官方机器人（适配器 is_robot 字段失效时启用，调用失败回退 is_robot）'),
             // —— 被禁言处理 ——
             notifyAdminOnMute: Schema.boolean().default(false).description('机器人被禁言时通知管理员'),
             muteNotificationMessage: Schema.string().role('textarea').default('机器人在群聊中被禁言\n群名称：{groupName}\n群号：{groupId}\n操作者：{operatorId}\n禁言时长：{duration}秒').description('被禁言通知模板，支持变量 {groupId}, {groupName}, {operatorId}, {duration}'),
@@ -205,6 +204,7 @@ export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         logging: Schema.object({
             verbose: Schema.boolean().default(false).description('调试模式：开启后输出 debug 级别日志，并启用 gc.debug 接口测试指令'),
-        }).description('日志配置'),
+            smallGroupRobotUinRangeMode: Schema.boolean().default(false).description('调试用：小群检测改用 get_robot_uin_range 号段区间判定官方机器人（适配器 is_robot 字段失效时启用，调用失败回退 is_robot）'),
+        }).description('日志与调试'),
     }),
 ]) as Schema<Config>
