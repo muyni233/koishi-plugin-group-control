@@ -16,6 +16,9 @@ export const name = 'group-control'
 // 插件依赖数据库服务，确保数据库就绪后再加载，规避初始化竞态
 export const inject = ['database']
 
+// 配置页顶部备注（支持 markdown）
+export const usage = '本插件的功能比较复杂，建议先查看 [readme](https://github.com/muyni233/koishi-plugin-group-control) 再使用哦~'
+
 
 export function apply(ctx: Context, config: Config) {
   ctx.on('dispose', () => {
