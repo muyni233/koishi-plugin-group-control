@@ -30,7 +30,8 @@ export interface GroupConfig {
 }
 
 export interface AdminConfig {
-    adminQQs: string[]
+    primaryAdmins: string[]
+    deputyAdmins: string[]
     notificationGroupId: string
 }
 
@@ -106,8 +107,9 @@ export interface Config {
 export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         admin: Schema.object({
-            adminQQs: Schema.array(String).default([]).description('管理员QQ号列表（权限验证及通知）'),
-            notificationGroupId: Schema.string().description('通知群号（填写后发到此群，否则私聊管理员）'),
+            primaryAdmins: Schema.array(String).default([]).description('主管理员QQ号列表（绕过群管理员指令校验；通知默认发给首个主管理员）'),
+            deputyAdmins: Schema.array(String).default([]).description('副管理员QQ号列表（可用 gc 指令，其它群管理员指令仍会校验身份）'),
+            notificationGroupId: Schema.string().description('通知群号（填写后发到此群，否则私聊首个主管理员）'),
         }).description('管理员配置'),
     }),
     Schema.object({

@@ -35,7 +35,61 @@ export function escapeTpl(template: string, fields: Record<string, string | numb
     return out
 }
 
-/** 通知管理员：优先发到通知群，否则私聊每个 adminQQ。 */
+export type TargetDomain = 'group' | 'friend'
+
+export interface ResolvedTarget {
+    domain: TargetDomain
+    id: string
+}
+
+/**
+ * 取当前会话所引用（回复）消息的纯文本。引用消息挂在 session.event.message.quote.content
+ * （Koishi h 元素字符串），用 h.parse + toString(true) 把 <at>/<img> 等标签拍平，只留文字，
+ * 便于正则提取群号/QQ号。
+ */
+export function getQuotedText(session: Session): string {
+    const content = (session.event as { message?: { quote?: { content?: string } } } | undefined)?.message?.quote?.content
+    if (!content || typeof content !== 'string') return ''
+    try {
+        return h.parse(content).map(el => (typeof el.toString === 'function' ? el.toString(true) : '')).join('')
+    } catch {
+        return content.replace(/<[^>]+>/g, '')
+    }
+}
+
+/**
+ * 从机器人通知消息的纯文本里解析目标（群或好友）。
+ * - 含「好友申请」→ 好友，提取 QQ 号（群邀请通知虽也带 QQ:，但无此关键字，不会误判）。
+ * - 否则含「群号」→ 群（覆盖群邀请、黑名单拒绝、小群合格等通知）。
+ */
+export function parseQuotedTarget(text: string): ResolvedTarget | null {
+    if (!text) return null
+    if (/好友申请/.test(text)) {
+        const m = text.match(/QQ[：:]\s*(\d{5,})/i)
+        return m ? { domain: 'friend', id: m[1] } : null
+    }
+    const m = text.match(/群号[：:]\s*(\d{5,})/)
+    return m ? { domain: 'group', id: m[1] } : null
+}
+
+/** 带前缀的目标参数解析结果：明确域，或仅一个裸号待调用方自动识别。 */
+export type ParsedTargetArg = ResolvedTarget | { bare: string }
+
+/**
+ * 解析指令参数：支持 group:/friend:/g:/f:/群:/好友: 前缀强制域；无前缀视为裸号。
+ * 返回 null 表示无法识别为号码。
+ */
+export function parseTargetArg(input: string | undefined | null): ParsedTargetArg | null {
+    if (!input) return null
+    const g = input.match(/^(?:group|g|群)[:：]?\s*(\d{4,})$/i)
+    if (g) return { domain: 'group', id: g[1] }
+    const f = input.match(/^(?:friend|f|好友)[:：]?\s*(\d{4,})$/i)
+    if (f) return { domain: 'friend', id: f[1] }
+    const bare = parseGuildId(input)
+    return bare ? { bare } : null
+}
+
+/** 通知管理员：优先发到通知群，否则私聊首个（0号）主管理员。 */
 export async function notifyAdmins(ctx: Context, bot: Bot, config: Config, message: string): Promise<void> {
     const logger = createLogger(ctx, 'group-control:notify')
     if (config.admin.notificationGroupId) {
@@ -46,25 +100,45 @@ export async function notifyAdmins(ctx: Context, bot: Bot, config: Config, messa
             logger.warn(`发送通知到通知群 ${config.admin.notificationGroupId} 失败`, err)
         }
     }
-    if (config.admin.adminQQs?.length > 0) {
-        for (const adminQQ of config.admin.adminQQs) {
-            try {
-                await bot.sendPrivateMessage(adminQQ, message)
-            } catch (err) {
-                logger.warn(`发送通知给管理员 ${adminQQ} 失败`, err)
-            }
+    const primary = config.admin.primaryAdmins?.[0]
+    if (primary) {
+        try {
+            await bot.sendPrivateMessage(primary, message)
+        } catch (err) {
+            logger.warn(`发送通知给主管理员 ${primary} 失败`, err)
         }
     }
 }
 
-/** 是否为全局管理员（填在 adminQQs 里的） */
-export function isGlobalAdmin(session: Session, config: Config): boolean {
+/** 是否为主管理员（填在 primaryAdmins 里的） */
+export function isPrimaryAdmin(session: Session, config: Config): boolean {
     if (config.permission.mode === 'koishi') {
         const user = session.user as { authority?: number } | undefined
         return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
     }
     if (!session.userId) return false
-    return config.admin.adminQQs?.includes(session.userId) ?? false
+    return config.admin.primaryAdmins?.includes(session.userId) ?? false
+}
+
+/** 是否为副管理员（填在 deputyAdmins 里的；koishi 模式不区分主副，恒为 false） */
+export function isDeputyAdmin(session: Session, config: Config): boolean {
+    if (config.permission.mode === 'koishi') return false
+    if (!session.userId) return false
+    return config.admin.deputyAdmins?.includes(session.userId) ?? false
+}
+
+/** 是否为全局管理员（=主管理员）。builtin 模式认 primaryAdmins；koishi 模式由 authority 决定 */
+export function isGlobalAdmin(session: Session, config: Config): boolean {
+    return isPrimaryAdmin(session, config)
+}
+
+/** 是否为任意管理员（主或副）。gc 系列指令统一用此判定；koishi 模式由 authority 决定 */
+export function hasAdminPermission(session: Session, config: Config): boolean {
+    if (config.permission.mode === 'koishi') {
+        const user = session.user as { authority?: number } | undefined
+        return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
+    }
+    return isPrimaryAdmin(session, config) || isDeputyAdmin(session, config)
 }
 
 const GUILD_ADMIN_CACHE_TTL = 30 * 1000
@@ -210,8 +284,8 @@ export async function hasGuildPermission(session: Session, config: Config): Prom
 }
 
 /**
- * 检查全局管理权限（gc.ban/gc.approve/gc.fa 等）
- * builtin 模式：仅全局管理员（adminQQs）；koishi 模式：由 authority 决定
+ * 检查全局管理权限（主管理员）。builtin 模式认 primaryAdmins；koishi 模式由 authority 决定。
+ * 注：gc 系列指令现已统一用 hasAdminPermission（主、副均可）；本函数保留给「仅主管理员」语义。
  */
 export function hasGlobalPermission(session: Session, config: Config): boolean {
     return isGlobalAdmin(session, config)

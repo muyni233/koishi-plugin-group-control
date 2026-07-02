@@ -1,12 +1,11 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { hasGlobalPermission, notifyAdmins, getAdminCommandOptions, escapeTpl } from '../utils'
+import { notifyAdmins, escapeTpl } from '../utils'
 import { parseGuildId } from '../utils-id'
 import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
 import {
-    getPendingInvite, addPendingInvite, removePendingInvite,
-    getAllPendingInvites, clearExpiredPendingInvites,
+    addPendingInvite, clearExpiredPendingInvites,
     getBlacklistedGuild, markApprovedGuild,
 } from '../database'
 
@@ -14,7 +13,8 @@ export const name = 'group-control-invite'
 
 const SCOPE = 'group-control:invite'
 
-async function handleInviteRequest(bot: OneBotBot, flag: string, approve: boolean, comment = ''): Promise<void> {
+/** 处理群邀请请求（同意/拒绝），兼容 koishi 标准接口与 OneBot 原始接口。供 commands.ts 复用。 */
+export async function handleInviteRequest(bot: OneBotBot, flag: string, approve: boolean, comment = ''): Promise<void> {
     const adapterBot = bot as unknown as { handleGuildRequest?: (flag: string, approve: boolean, comment: string) => Promise<unknown> }
     if (typeof adapterBot.handleGuildRequest === 'function') {
         try {
@@ -184,8 +184,10 @@ export function apply(ctx: Context, config: Config) {
             logger.warn(`发送等待审核提示失败 userId=${userId}`, err)
         }
 
-        // 未配置管理员时，无人审核，直接返回
-        if (!config.admin.adminQQs || config.admin.adminQQs.length === 0) {
+        // 未配置任何管理员时，无人审核，直接返回
+        const hasAnyAdmin = (config.admin.primaryAdmins?.length ?? 0) > 0
+            || (config.admin.deputyAdmins?.length ?? 0) > 0
+        if (!hasAnyAdmin) {
             return
         }
 
@@ -206,125 +208,4 @@ export function apply(ctx: Context, config: Config) {
         await notifyAdmins(ctx, bot, config, requestMessage)
         logger.debug('已发送群邀请审核通知')
     })
-
-    // ======== 注册审核指令 ========
-    const cmdOpts = getAdminCommandOptions(config)
-
-    // 同意邀请指令
-    ctx.command('gc.approve <groupId:string>', '同意群聊邀请', cmdOpts)
-        .action(async ({ session }, groupIdInput) => {
-            if (!session) return ''
-            if (!groupIdInput) return '请指定群号。用法：gc.approve <群号>'
-            const groupId = parseGuildId(groupIdInput)
-            if (!groupId) return '输入格式错误，请输入群号。'
-            const bot = asOneBotBot(session.bot)
-            const selfId = getBotSelfId(bot)
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-
-            // 验证是否为管理员
-            if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。'
-
-            // 黑名单拦截：若群已在黑名单中，拒绝通过审核
-            if (config.basic.enableBlacklist) {
-                const bl = await getBlacklistedGuild(ctx, groupId)
-                if (bl.length > 0) {
-                    return `群 ${groupId} 在黑名单中，无法通过审核。如需放行请先执行 gc.unban ${groupId}。`
-                }
-            }
-
-            const inviteData = await getPendingInvite(ctx, session.platform, groupId, selfId)
-            if (!inviteData) {
-                const allInvites = await getAllPendingInvites(ctx, session.platform, selfId)
-                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${allInvites.length > 0
-                    ? allInvites.map(i => `${i.groupId}(${i.groupName})`).join(', ')
-                    : '无'
-                    }`
-            }
-
-            try {
-                await handleInviteRequest(bot, inviteData.flag, true)
-
-                // 记录已审核通过，防止小群自动退群
-                await markApprovedGuild(ctx, groupId, selfId)
-
-                // 通知邀请者
-                try {
-                    await bot.sendPrivateMessage(inviteData.userId, '您的群聊邀请已通过管理员审核，机器人已加入群聊。')
-                } catch (err) {
-                    logger.warn(`通知邀请者失败 userId=${inviteData.userId}`, err)
-                }
-
-                await removePendingInvite(ctx, session.platform, groupId, selfId)
-                return `已同意加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`
-            } catch (err) {
-                logger.error('处理同意邀请失败', err)
-                return `处理同意邀请失败: ${errorMessage(err)}`
-            }
-        })
-
-    // 拒绝邀请指令
-    ctx.command('gc.reject <groupId:string>', '拒绝群聊邀请', cmdOpts)
-        .action(async ({ session }, groupIdInput) => {
-            if (!session) return ''
-            if (!groupIdInput) return '请指定群号。用法：gc.reject <群号>'
-            const groupId = parseGuildId(groupIdInput)
-            if (!groupId) return '输入格式错误，请输入群号。'
-            const bot = asOneBotBot(session.bot)
-            const selfId = getBotSelfId(bot)
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-
-            // 验证是否为管理员
-            if (!hasGlobalPermission(session, config)) return '权限不足，只有管理员可以审核邀请。'
-
-            const inviteData = await getPendingInvite(ctx, session.platform, groupId, selfId)
-            if (!inviteData) {
-                const allInvites = await getAllPendingInvites(ctx, session.platform, selfId)
-                return `未找到群号 ${groupId} 的待处理邀请。当前待处理邀请：${allInvites.length > 0
-                    ? allInvites.map(i => `${i.groupId}(${i.groupName})`).join(', ')
-                    : '无'
-                    }`
-            }
-
-            try {
-                await handleInviteRequest(bot, inviteData.flag, false, '已拒绝')
-
-                try {
-                    await bot.sendPrivateMessage(inviteData.userId, '您的群聊邀请未通过管理员审核，机器人将不会加入该群聊。')
-                } catch (err) {
-                    logger.warn(`通知邀请者失败 userId=${inviteData.userId}`, err)
-                }
-
-                await removePendingInvite(ctx, session.platform, groupId, selfId)
-                return `已拒绝加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`
-            } catch (err) {
-                logger.error('处理拒绝邀请失败', err)
-                return `处理拒绝邀请失败: ${errorMessage(err)}`
-            }
-        })
-
-    // 查看待处理邀请指令
-    ctx.command('gc.pending', '查看待处理的群聊邀请', cmdOpts)
-        .action(async ({ session }) => {
-            if (!session) return ''
-            if (!hasGlobalPermission(session, config)) {
-                return '权限不足，只有管理员可以查看待处理邀请。'
-            }
-            const selfId = getBotSelfId(asOneBotBot(session.bot))
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-
-            const allInvites = await getAllPendingInvites(ctx, session.platform, selfId)
-            if (allInvites.length === 0) {
-                return '当前没有待处理的群聊邀请。'
-            }
-
-            const lines = ['待处理的群聊邀请列表：']
-            for (const invite of allInvites) {
-                const elapsed = Math.floor((Date.now() / 1000 - invite.time) / 60)
-                lines.push(`- 群：${invite.groupName}（${invite.groupId}）`)
-                lines.push(`  邀请者：${invite.userName}（${invite.userId}）`)
-                lines.push(`  ${elapsed} 分钟前`)
-                lines.push(`  同意：gc.approve ${invite.groupId} | 拒绝：gc.reject ${invite.groupId}`)
-            }
-            return lines.join('\n')
-        })
 }

@@ -1,17 +1,16 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGlobalPermission, getAdminCommandOptions, escapeTpl } from '../utils'
+import { notifyAdmins, escapeTpl } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import { asOneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
 import {
-    getPendingFriendRequest, addPendingFriendRequest, removePendingFriendRequest,
-    getAllPendingFriendRequests, clearExpiredPendingFriendRequests,
+    addPendingFriendRequest, clearExpiredPendingFriendRequests, getBlacklistedFriend,
 } from '../database'
 
 export const name = 'group-control-friend'
 
-const SCOPE = 'group-control:friend'
+const SCOPE = 'group-control-friend'
 
 export function apply(ctx: Context, config: Config) {
     if (!config.friend.enabled) return
@@ -41,6 +40,22 @@ export function apply(ctx: Context, config: Config) {
         const selfId = getBotSelfId(bot)
         if (!userId || !selfId) {
             logger.warn(`无法解析好友申请 ID userId=${raw.user_id ?? session.userId} selfId=${session.bot?.selfId}`)
+            return
+        }
+
+        // 好友黑名单拦截：已拉黑的用户发来的申请一律自动拒绝
+        if (await getBlacklistedFriend(ctx, userId)) {
+            try {
+                await bot.internal.setFriendAddRequest(flag, false, '已被拉黑')
+            } catch (err) {
+                logger.warn('拒绝黑名单好友申请失败', err)
+            }
+            try {
+                await notifyAdmins(ctx, bot, config, `已自动拒绝黑名单好友申请\nQQ：${userId}`)
+            } catch (err) {
+                logger.warn('通知管理员（黑名单好友拒绝）失败', err)
+            }
+            logger.event('friend.auto-reject-blacklist', { userId })
             return
         }
 
@@ -81,69 +96,4 @@ export function apply(ctx: Context, config: Config) {
         })
         await notifyAdmins(ctx, bot, config, msg)
     })
-
-    // ── 指令 ──────────────────────────────────────────────
-    const cmdOpts = getAdminCommandOptions(config)
-
-    ctx.command('gc.friend-pending', '查看待处理的好友申请', cmdOpts)
-        .alias('gc.fp')
-        .action(async ({ session }) => {
-            if (!session) return ''
-            if (!hasGlobalPermission(session, config)) return '权限不足。'
-            const selfId = getBotSelfId(session.bot)
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-            const all = await getAllPendingFriendRequests(ctx, session.platform, selfId)
-            if (all.length === 0) return '当前没有待处理的好友申请。'
-            const lines = ['待处理好友申请列表：']
-            for (const r of all) {
-                const elapsed = Math.floor((Date.now() / 1000 - r.time) / 60)
-                lines.push(`- ${r.nickname}（${r.userId}）附言：${r.comment || '无'} · ${elapsed} 分钟前`)
-                lines.push(`  同意：gc.friend-approve ${r.userId} | 拒绝：gc.friend-reject ${r.userId}`)
-            }
-            return lines.join('\n')
-        })
-
-    ctx.command('gc.friend-approve <userId:string>', '同意好友申请', cmdOpts)
-        .alias('gc.fa')
-        .action(async ({ session }, userIdInput) => {
-            if (!session) return ''
-            if (!hasGlobalPermission(session, config)) return '权限不足。'
-            if (!userIdInput) return '请指定QQ号。用法：gc.friend-approve <QQ号>'
-            const userId = parseGuildId(userIdInput)
-            if (!userId) return '输入格式错误，请输入 QQ 号。'
-            const bot = asOneBotBot(session.bot)
-            const selfId = getBotSelfId(bot)
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-            const record = await getPendingFriendRequest(ctx, session.platform, selfId, userId)
-            if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
-            try {
-                await bot.internal.setFriendAddRequest(record.flag, true, '')
-                await removePendingFriendRequest(ctx, session.platform, selfId, userId)
-                return `已同意 ${record.nickname}（${userId}）的好友申请。`
-            } catch (err) {
-                return `处理失败：${errorMessage(err)}`
-            }
-        })
-
-    ctx.command('gc.friend-reject <userId:string>', '拒绝好友申请', cmdOpts)
-        .alias('gc.fr')
-        .action(async ({ session }, userIdInput) => {
-            if (!session) return ''
-            if (!hasGlobalPermission(session, config)) return '权限不足。'
-            if (!userIdInput) return '请指定QQ号。用法：gc.friend-reject <QQ号>'
-            const userId = parseGuildId(userIdInput)
-            if (!userId) return '输入格式错误，请输入 QQ 号。'
-            const bot = asOneBotBot(session.bot)
-            const selfId = getBotSelfId(bot)
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-            const record = await getPendingFriendRequest(ctx, session.platform, selfId, userId)
-            if (!record) return `未找到来自 ${userId} 的待处理好友申请。`
-            try {
-                await bot.internal.setFriendAddRequest(record.flag, false, '')
-                await removePendingFriendRequest(ctx, session.platform, selfId, userId)
-                return `已拒绝 ${record.nickname}（${userId}）的好友申请。`
-            } catch (err) {
-                return `处理失败：${errorMessage(err)}`
-            }
-        })
 }

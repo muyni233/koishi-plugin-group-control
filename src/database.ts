@@ -9,6 +9,13 @@ export interface BlacklistedGuild {
     reason: string
 }
 
+export interface BlacklistedFriend {
+    platform: string
+    userId: string
+    timestamp: number
+    reason: string
+}
+
 export interface CommandFrequencyRecord {
     platform: string
     guildId: string
@@ -70,6 +77,7 @@ export interface PendingFriendRequest {
 declare module 'koishi' {
     interface Tables {
         blacklisted_guild: BlacklistedGuild
+        blacklisted_friend: BlacklistedFriend
         command_frequency_record: CommandFrequencyRecord
         group_bot_status: GroupBotStatus
         small_group_whitelist: SmallGroupWhitelist
@@ -93,6 +101,13 @@ export function apply(ctx: Context) {
         timestamp: 'integer',
         reason: 'string',
     }, { primary: ['platform', 'guildId'] })
+
+    ctx.model.extend('blacklisted_friend', {
+        platform: 'string',
+        userId: 'string',
+        timestamp: 'integer',
+        reason: 'string',
+    }, { primary: ['platform', 'userId'] })
 
     ctx.model.extend('command_frequency_record', {
         platform: 'string',
@@ -234,6 +249,41 @@ export async function getAllBlacklistedGuilds(ctx: Context) {
 
 export async function clearBlacklistedGuilds(ctx: Context) {
     return await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM });
+}
+
+// ── 好友黑名单（与群黑名单对称，用于 gc.ban 好友、自动拒绝其后续申请）──
+
+export async function getBlacklistedFriend(ctx: Context, userId: string): Promise<boolean> {
+    userId = normalizeId(userId);
+    const rows = await ctx.database.get('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId });
+    if (rows.length > 0) return true;
+    return (await getRowsByNormalizedId(ctx, 'blacklisted_friend', 'userId', BLACKLIST_PLATFORM, userId)).length > 0;
+}
+
+export async function createBlacklistedFriend(ctx: Context, userId: string, reason: string) {
+    userId = normalizeId(userId);
+    return await ctx.database.upsert('blacklisted_friend', [{
+        platform: BLACKLIST_PLATFORM,
+        userId,
+        timestamp: Math.floor(Date.now() / 1000),
+        reason,
+    }]);
+}
+
+export async function removeBlacklistedFriend(ctx: Context, userId: string) {
+    userId = normalizeId(userId);
+    const rows = await getRowsByNormalizedId(ctx, 'blacklisted_friend', 'userId', BLACKLIST_PLATFORM, userId);
+    await ctx.database.remove('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId });
+    for (const row of rows) {
+        if (row.userId !== userId) {
+            await ctx.database.remove('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId: row.userId });
+        }
+    }
+    return rows.length > 0;
+}
+
+export async function getAllBlacklistedFriends(ctx: Context) {
+    return await ctx.database.get('blacklisted_friend', { platform: BLACKLIST_PLATFORM });
 }
 
 /** 统一写入被踢黑名单行，保证 platform = BLACKLIST_PLATFORM */
