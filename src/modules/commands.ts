@@ -349,7 +349,7 @@ export function apply(ctx: Context, config: Config) {
         })
     ctx.command('gc.del [target:string]', '删除好友/退出群聊', cmdOpts)
         .action(async ({ session }, target) => { if (!session) return ''; return doDel(ctx, config, session, target) })
-    ctx.command('gc.groups', '查看所在群', cmdOpts)
+    ctx.command('gc.groups', '查看群列表', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
             if (!hasAdminPermission(session, config)) return '权限不足。'
