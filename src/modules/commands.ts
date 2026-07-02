@@ -490,38 +490,6 @@ export function apply(ctx: Context, config: Config) {
             }
         })
 
-    // ======== 兼容别名（强制好友域）========
-    ctx.command('gc.friend-approve [target:string]', '同意好友申请（兼容别名，等价 gc.approve friend:）', cmdOpts)
-        .alias('gc.fa')
-        .action(async ({ session }, target) => {
-            if (!session) return ''
-            return doApprove(ctx, config, session, target, 'friend')
-        })
-
-    ctx.command('gc.friend-reject [target:string]', '拒绝好友申请（兼容别名，等价 gc.reject friend:）', cmdOpts)
-        .alias('gc.fr')
-        .action(async ({ session }, target) => {
-            if (!session) return ''
-            return doReject(ctx, config, session, target, 'friend')
-        })
-
-    ctx.command('gc.friend-pending', '查看待处理的好友申请（兼容别名）', cmdOpts)
-        .alias('gc.fp')
-        .action(async ({ session }) => {
-            if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
-            const selfId = getBotSelfId(asOneBotBot(session.bot))
-            if (!selfId) return '无法识别当前机器人账号，已取消操作。'
-            const friends = await getAllPendingFriendRequests(ctx, session.platform, selfId)
-            if (friends.length === 0) return '当前没有待处理的好友申请。'
-            const lines = ['待处理好友申请：']
-            friends.forEach((r, i) => {
-                const elapsed = Math.floor((Date.now() / 1000 - r.time) / 60)
-                lines.push(`${i + 1}. ${r.nickname}（${r.userId}）附言：${r.comment || '无'} · ${elapsed} 分钟前`)
-            })
-            return lines.join('\n')
-        })
-
     // ======== 调试：OneBot 接口测试（仅调试模式可用）========
     // 用于排查小群「排除官方机器人」检测为何失效：直接调用 OneBot internal 接口，
     // 把原始返回打印出来，跟手测 API 的结果对照，定位 is_robot 字段缺失/失真的根因。

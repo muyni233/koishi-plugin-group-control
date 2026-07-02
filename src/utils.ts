@@ -43,13 +43,19 @@ export interface ResolvedTarget {
 }
 
 /**
- * 取当前会话所引用（回复）消息的纯文本。引用消息挂在 session.event.message.quote.content
- * （Koishi h 元素字符串），用 h.parse + toString(true) 把 <at>/<img> 等标签拍平，只留文字，
- * 便于正则提取群号/QQ号。
+ * 取当前会话所引用（回复）消息的纯文本。
+ * OneBot 适配器回复时把被引用消息以元素数组形式挂在 session.quote.elements，
+ * 逐个 toString(true) 拍平拼接后只留文字，便于正则提取群号/QQ号。
+ * 极少数实现只填 content 字符串时回退用 h.parse 拍平。
  */
 export function getQuotedText(session: Session): string {
-    const content = (session.event as { message?: { quote?: { content?: string } } } | undefined)?.message?.quote?.content
-    if (!content || typeof content !== 'string') return ''
+    const quote = (session as { quote?: { elements?: { toString(strip?: boolean): string }[]; content?: string } }).quote
+    const elements = quote?.elements
+    if (Array.isArray(elements) && elements.length > 0) {
+        return elements.map(el => (typeof el.toString === 'function' ? el.toString(true) : '')).join('')
+    }
+    const content = typeof quote?.content === 'string' ? quote.content : ''
+    if (!content) return ''
     try {
         return h.parse(content).map(el => (typeof el.toString === 'function' ? el.toString(true) : '')).join('')
     } catch {
@@ -298,8 +304,6 @@ export const ADMIN_COMMANDS = new Set([
     'gc.approve', 'gc.reject', 'gc.pending',
     'gc.sg-add', 'gc.sg-rm', 'gc.sg-list',
     'gc.friends', 'gc.delfriend', 'gc.groups', 'gc.leave',
-    'gc.friend-pending', 'gc.friend-approve', 'gc.friend-reject',
-    'gc.fp', 'gc.fa', 'gc.fr',
     'gc.debug', 'gc.debug.member-list', 'gc.debug.member', 'gc.debug.raw',
 ])
 
