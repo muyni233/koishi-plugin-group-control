@@ -17,10 +17,12 @@ export interface GroupConfig {
     smallGroupCheckDelay: number
     smallGroupQuitMessage: string
     smallGroupNotifyAdmin: boolean
-    smallGroupQualifiedNotifyAdmin: boolean
-    smallGroupQualifiedMessage: string
+    // —— 实时小群监控 ——
     smallGroupRealtimeMonitor: boolean
     smallGroupRecheckCooldown: number
+    // —— 合格小群通知 ——
+    smallGroupQualifiedNotifyAdmin: boolean
+    smallGroupQualifiedMessage: string
     // —— 被禁言处理 ——
     notifyAdminOnMute: boolean
     muteNotificationMessage: string
@@ -140,10 +142,10 @@ export const Config: Schema<Config> = Schema.intersect([
             smallGroupCheckDelay: Schema.natural().default(3000).description('入群后延迟检测的时间（毫秒），等待成员列表就绪'),
             smallGroupQuitMessage: Schema.string().role('textarea').default('该群人数过少（{memberCount}人），不满足最低人数要求（{threshold}人），机器人将自动退出。').description('小群退群提示，支持变量 {memberCount}, {threshold}, {groupName}, {groupId}'),
             smallGroupNotifyAdmin: Schema.boolean().default(true).description('小群自动退群时通知管理员'),
-            smallGroupQualifiedNotifyAdmin: Schema.boolean().default(true).description('被未经审核拉入但人数达标的群是否通知管理员'),
-            smallGroupQualifiedMessage: Schema.string().role('textarea').default('机器人被未经审核地拉入群聊\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）\n请确认是否保留。').description('合格小群通知模板，支持变量 {groupName}, {groupId}, {memberCount}, {threshold}'),
             smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控：监听成员退群事件，群缩小到阈值以下时再次自动退群'),
             smallGroupRecheckCooldown: Schema.natural().default(60).description('实时监控：同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调接口'),
+            smallGroupQualifiedNotifyAdmin: Schema.boolean().default(true).description('被未经审核拉入但人数达标的群是否通知管理员'),
+            smallGroupQualifiedMessage: Schema.string().role('textarea').default('机器人被未经审核地拉入群聊\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）\n请确认是否保留。').description('合格小群通知模板，支持变量 {groupName}, {groupId}, {memberCount}, {threshold}'),
             // —— 被禁言处理 ——
             notifyAdminOnMute: Schema.boolean().default(false).description('机器人被禁言时通知管理员'),
             muteNotificationMessage: Schema.string().role('textarea').default('机器人在群聊中被禁言\n群名称：{groupName}\n群号：{groupId}\n操作者：{operatorId}\n禁言时长：{duration}秒').description('被禁言通知模板，支持变量 {groupId}, {groupName}, {operatorId}, {duration}'),

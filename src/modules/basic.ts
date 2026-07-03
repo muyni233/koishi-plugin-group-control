@@ -325,7 +325,10 @@ export function apply(ctx: Context, config: Config) {
         }
 
         if (config.basic.smallGroupNotifyAdmin) {
-            const adminMsg = `小群自动退群\n群名称：${groupName}\n群号：${guildId}\n群成员数：${memberCount}人（阈值：${threshold}人）\n机器人已自动退出该群。`
+            const adminMsg = escapeTpl(
+                `小群自动退群\n群名称：{groupName}\n群号：${guildId}\n群成员数：${memberCount}人（阈值：${threshold}人）\n机器人已自动退出该群。`,
+                { groupName },
+            )
             await notifyAdmins(ctx, bot, config, adminMsg)
         }
 
@@ -631,7 +634,10 @@ export function apply(ctx: Context, config: Config) {
                 const groupName = await getGroupName(bot, guildId, logger)
 
                 // 通知管理员
-                const adminMsg = `收到来自 ${userId} 的退群指令\n群名称：${groupName}\n群号：${guildId}`
+                const adminMsg = escapeTpl(
+                    `收到来自 ${userId} 的退群指令\n群名称：{groupName}\n群号：${guildId}`,
+                    { groupName },
+                )
                 await notifyAdmins(ctx, bot, config, adminMsg)
 
                 quittingGuilds.set(dedupKey, Date.now())

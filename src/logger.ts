@@ -61,8 +61,8 @@ function formatFields(fields?: Record<string, unknown>): string {
     return parts.length > 0 ? ' ' + parts.join(' ') : ''
 }
 
-/** 把 unknown 异常转成可读字符串（保留 stack） */
-export function errorDetail(err: unknown): string {
+/** 把 unknown 异常转成可读字符串（保留 stack）。仅 logger 内部用于 error/warn 展开。 */
+function errorDetail(err: unknown): string {
     if (err == null) return ''
     if (err instanceof Error) return err.stack ?? `${err.name}: ${err.message}`
     if (typeof err === 'string') return err
@@ -90,15 +90,28 @@ export function isVerbose(config: Config): boolean {
     return config.logging?.verbose ?? false
 }
 
+/**
+ * 创建一个 ScopedLogger。
+ *
+ * 两个重载对应两种调用方式：
+ *   - createLogger(ctx, scope, config)：从全局 Config 读 config.logging.verbose
+ *   - createLogger(ctx, scope, options)：直接传 { verbose: boolean }
+ * 不传第三参时 verbose 取默认值 false。
+ */
+export function createLogger(ctx: Context, scope: string, config: Config): ScopedLogger
+export function createLogger(ctx: Context, scope: string, options: LoggerOptions): ScopedLogger
+export function createLogger(ctx: Context, scope: string): ScopedLogger
 export function createLogger(ctx: Context, scope: string, optionsOrConfig?: LoggerOptions | Config): ScopedLogger {
     const base: Logger = ctx.logger(scope)
     let verbose = false
     if (optionsOrConfig !== undefined) {
-        if ('verbose' in optionsOrConfig && typeof optionsOrConfig.verbose === 'boolean') {
-            verbose = optionsOrConfig.verbose
-        } else {
-            verbose = isVerbose(optionsOrConfig as Config)
-        }
+        // LoggerOptions 是 { verbose?: boolean }；Config 的顶层没有 boolean 类型的 verbose
+        // 字段（其 verbose 在 config.logging.verbose 嵌套里），故用 typeof 一次性区分两种形态，
+        // 比起 'verbose' in obj 的存在性判别更贴合类型结构，也不会被空对象误判。
+        const maybeVerbose = (optionsOrConfig as { verbose?: unknown }).verbose
+        verbose = typeof maybeVerbose === 'boolean'
+            ? maybeVerbose
+            : isVerbose(optionsOrConfig as Config)
     }
 
     return {

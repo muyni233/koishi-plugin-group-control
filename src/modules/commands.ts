@@ -1,7 +1,7 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import {
-    isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission,
+    isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission, escapeTpl,
 } from '../utils'
 import { toOneBotNumber, formatDate } from '../utils-id'
 import { asOneBotBot, getBotSelfId, OneBotBot, OneBotForwardNode, OneBotFriend, OneBotGroupInfo, OneBotMember } from '../types'
@@ -56,7 +56,11 @@ async function sendAsForward(session: Session, title: string, lines: string[]): 
     }
 }
 
-/** 兼容地调用 delete_friend（先位置参数，后对象参数） */
+/**
+ * 兼容地调用 delete_friend：先试位置参数（新签名），失败再试对象参数（旧签名）。
+ * 两次都失败时，重抛第二次的错误，并把第一次的错误作为 cause 保留，
+ * 便于定位是适配器不支持位置参数、还是 delete_friend 本身失败。
+ */
 async function deleteFriendCompat(session: Session, userId: string): Promise<void> {
     const internal = asOneBotBot(session.bot).internal
     if (typeof internal.deleteFriend !== 'function') {
@@ -66,8 +70,13 @@ async function deleteFriendCompat(session: Session, userId: string): Promise<voi
     if (n == null) throw new Error('输入格式错误，请输入要删除的好友 QQ 号。')
     try {
         await internal.deleteFriend(n)
-    } catch {
-        await internal.deleteFriend({ user_id: n, friend_id: n, temp_block: false, both_del: false })
+    } catch (firstErr) {
+        try {
+            await internal.deleteFriend({ user_id: n, friend_id: n, temp_block: false, both_del: false })
+        } catch (secondErr) {
+            // 两次都失败：以第二次的错误为表面信息抛出，第一次的链入 cause 便于排查适配器差异
+            throw new Error(`位置参数与对象参数均失败：${errorMessage(secondErr)}`, { cause: firstErr })
+        }
     }
 }
 
@@ -161,6 +170,7 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
     const r = await resolveBanTarget(session, arg)
     if (!r.ok) return r.message
     const id = r.target.id
+    const bot = asOneBotBot(session.bot)
 
     if (r.target.domain === 'group') {
         const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg
@@ -168,7 +178,6 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
         if (existing.length > 0) return `群聊 ${id} 已在黑名单中。`
         await createBlacklistedGuild(ctx, id, 'manual_add')
 
-        const bot = asOneBotBot(session.bot)
         const selfId = getBotSelfId(bot)
         let note = ''
         if (selfId && await isBotInGroup(bot, id)) {
@@ -189,11 +198,11 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
 
     await createBlacklistedFriend(ctx, id, 'manual_add')
     const notes: string[] = []
-    const selfId = getBotSelfId(session.bot)
+    const selfId = getBotSelfId(bot)
     if (selfId) {
         const rec = await getPendingFriendRequest(ctx, session.platform, selfId, id)
         if (rec) {
-            try { await asOneBotBot(session.bot).internal.setFriendAddRequest(rec.flag, false, '已拉黑') } catch { /* 忽略 */ }
+            try { await bot.internal.setFriendAddRequest(rec.flag, false, '已拉黑') } catch { /* 忽略 */ }
             await removePendingFriendRequest(ctx, session.platform, selfId, id)
             notes.push('已拒绝待处理申请')
         }
@@ -245,13 +254,20 @@ export function apply(ctx: Context, config: Config) {
             if (invites.length > 0) {
                 lines.push(`【待处理群邀请 · ${invites.length}】`)
                 invites.forEach((iv, i) => {
-                    lines.push(`${i + 1}. ${iv.groupName}（${iv.groupId}）· 邀请者 ${iv.userName}（${iv.userId}）`)
+                    lines.push(escapeTpl(
+                        `${i + 1}. {groupName}（${iv.groupId}）· 邀请者 {userName}（${iv.userId}）`,
+                        { groupName: iv.groupName, userName: iv.userName },
+                    ))
                 })
             }
             if (friends.length > 0) {
                 lines.push(`【待处理好友申请 · ${friends.length}】`)
                 friends.forEach((fr, i) => {
-                    lines.push(`${i + 1}. ${fr.nickname}（${fr.userId}）· 附言：${fr.comment || '无'}`)
+                    const comment = fr.comment || '无'
+                    lines.push(escapeTpl(
+                        `${i + 1}. {nickname}（${fr.userId}）· 附言：{comment}`,
+                        { nickname: fr.nickname, comment },
+                    ))
                 })
             }
             await sendAsForward(session, `待处理请求（群邀请 ${invites.length} · 好友申请 ${friends.length}）`, lines)
@@ -341,7 +357,7 @@ export function apply(ctx: Context, config: Config) {
             await sendAsForward(session, `好友列表（共 ${list.length} 个）`, list.map((f, i) => {
                 const uid = f.user_id ?? f.userId ?? ''
                 const name = f.remark || f.nickname || f.nick || String(uid)
-                return `${i + 1}. ${name} (${uid})`
+                return escapeTpl(`${i + 1}. {name} (${uid})`, { name })
             }))
             return ''
         })
@@ -398,7 +414,7 @@ export function apply(ctx: Context, config: Config) {
                 const count = g.member_count ?? g.memberCount
                 const max = g.max_member_count ?? g.maxMemberCount
                 const sizeInfo = (count != null) ? `（${count}${max != null ? `/${max}` : ''}人）` : ''
-                return `${i + 1}. ${gname} (${gid})${sizeInfo}`
+                return escapeTpl(`${i + 1}. {gname} (${gid})${sizeInfo}`, { gname })
             }))
             return ''
         })

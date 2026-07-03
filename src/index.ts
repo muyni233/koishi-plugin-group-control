@@ -17,7 +17,10 @@ export const name = 'group-control'
 export const inject = ['database']
 
 // 配置页顶部备注（支持 markdown）
-export const usage = '本插件的功能比较复杂，建议先查看 [readme](https://github.com/muyni233/koishi-plugin-group-control) 再使用哦~'
+export const usage = [
+  '本插件的功能比较复杂，建议先查看 [readme](https://github.com/muyni233/koishi-plugin-group-control) 再使用哦',
+  '如果有任何意见或 bug，欢迎提交 [issue](https://github.com/muyni233/koishi-plugin-group-control/issues) ~',
+].join('\n\n')
 
 
 export function apply(ctx: Context, config: Config) {

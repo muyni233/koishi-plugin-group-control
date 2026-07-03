@@ -215,6 +215,103 @@ async function getRowsByNormalizedId<K extends keyof Tables>(
     return rows.filter((row) => normalizeId(String((row as Record<string, unknown>)[field] ?? '')) === normalized);
 }
 
+/**
+ * 三级回退查找单行（仅用于带 selfId 维度的表，如 self_left_guild / approved_guild /
+ * pending_invite / pending_friend_request）。依次尝试：
+ *   1. scoped 形 id（`selfId#id`）—— 当前版本写入格式
+ *   2. legacy unscoped id（裸 id）        —— 旧版本未区分 bot 的写入格式
+ *   3. prefixed-legacy（如 `onebot:12345`）── 更早的未规范化格式，靠 getRowsByNormalizedId 捞回
+ *
+ * 命中后一并返回「删除该行应使用的字段值」，避免调用方再二次定位。
+ * 命中上一级即不触发下一级的查询，沿用旧实现的短路语义。
+ *
+ * field 为目标 id 列名（如 'guildId' / 'userId' / 'groupId'）。
+ */
+type ScopedRowResult = {
+    /** 命中的原始行 ID 字段（已存于库中的形态，删除时按它构造条件） */
+    storedId: string
+    /** 命中的行；facade 仅读取此对象的 id 字段，故可用宽松类型 */
+    row: Record<string, unknown>
+} | null;
+
+async function findScopedRow(
+    ctx: Context,
+    table: keyof Tables,
+    field: string,
+    platform: string,
+    id: string,
+    selfId: string,
+): Promise<ScopedRowResult> {
+    const selfKey = normalizeId(selfId);
+    const normId = normalizeId(id);
+    // scoped：当前写入格式
+    {
+        const scopedIdStr = scopedId(id, selfKey);
+        const [row] = await ctx.database.get(
+            table,
+            { platform, [field]: scopedIdStr } as any,
+        );
+        if (row) return { storedId: scopedIdStr, row: row as Record<string, unknown> };
+    }
+    // legacy unscoped：旧版本（未区分 bot）格式
+    {
+        const [row] = await ctx.database.get(
+            table,
+            { platform, [field]: normId } as any,
+        );
+        if (row) return { storedId: normId, row: row as Record<string, unknown> };
+    }
+    // prefixed-legacy：更早的未规范化格式（如 onebot:12345），靠全表归一化比对捞回
+    const prefixed = await getRowsByNormalizedId(ctx, table, field as never, platform, id);
+    const hit = prefixed.find(r => !isScopedId(String((r as Record<string, unknown>)[field] ?? '')));
+    if (hit) return { storedId: String((hit as Record<string, unknown>)[field] ?? ''), row: hit as Record<string, unknown> };
+    return null;
+}
+
+/**
+ * 删除单个 scoped 行（带 selfId 维度的表）。覆盖三级回退形态：
+ *   - scoped（selfId#id）
+ *   - legacy unscoped（裸 id）
+ *   - prefixed-legacy（未规范化格式，逐行删，仅删非 scoped 的脏数据）
+ *
+ * 不传 selfId（用于 unban 等无 bot 上下文场景）时，改为全表拉取后按归一化 id 比对删除——
+ * 因为此时 scoped 前缀未知，无法直查，只能扫描。
+ */
+async function clearScopedRows(
+    ctx: Context,
+    table: keyof Tables,
+    field: string,
+    platform: string,
+    guildId: string,
+    selfId?: string,
+): Promise<void> {
+    const normalizedId = normalizeId(guildId);
+    if (selfId) {
+        const selfKey = normalizeId(selfId);
+        // scoped
+        await ctx.database.remove(table, { platform, [field]: scopedId(guildId, selfKey) } as any);
+        // legacy unscoped
+        await ctx.database.remove(table, { platform, [field]: normalizedId } as any);
+        // prefixed-legacy：仅删非 scoped 的脏数据（scoped 行已是当前格式，不动）
+        const dirty = await getRowsByNormalizedId(ctx, table, field as never, platform, guildId);
+        for (const row of dirty) {
+            const stored = String((row as Record<string, unknown>)[field] ?? '');
+            if (!isScopedId(stored)) {
+                await ctx.database.remove(table, { platform, [field]: stored } as any);
+            }
+        }
+        return;
+    }
+    // 无 selfId：全表扫描按归一化 id 比对删除
+    const rows = await ctx.database.get(table, { platform } as any);
+    for (const row of rows) {
+        const stored = String((row as Record<string, unknown>)[field] ?? '');
+        if (unscopedId(stored) === normalizedId) {
+            await ctx.database.remove(table, { platform, [field]: stored } as any);
+        }
+    }
+}
+
 export async function getBlacklistedGuild(ctx: Context, guildId: string) {
     guildId = normalizeId(guildId);
     const rows = await ctx.database.get('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
@@ -311,45 +408,20 @@ export async function markSelfLeft(ctx: Context, guildId: string, selfId: string
     }]);
 }
 
-/** 消费标记（单次读取后删除），返回是否在 maxAgeSec 内。用于 guild-removed 判断是自己退的 */
+/** 消费标记（单次读取后即删除），返回是否在 maxAgeSec 内。用于 guild-removed 判断是自己退的 */
 export async function consumeSelfLeft(ctx: Context, guildId: string, selfId: string, maxAgeSec = 120): Promise<boolean> {
     selfId = normalizeId(selfId);
-    const normalizedGuildId = normalizeId(guildId);
-    const scopedQuery = { platform: BLACKLIST_PLATFORM, guildId: scopedId(guildId, selfId) };
-    const legacyQuery = { platform: BLACKLIST_PLATFORM, guildId: normalizedGuildId };
-    const [row] = await ctx.database.get('self_left_guild', scopedQuery);
-    const [legacyRow] = row ? [] : await ctx.database.get('self_left_guild', legacyQuery);
-    const [prefixedLegacyRow] = (row || legacyRow) ? [] : await getRowsByNormalizedId(ctx, 'self_left_guild', 'guildId', BLACKLIST_PLATFORM, guildId);
-    const target = row ?? legacyRow ?? prefixedLegacyRow;
-    const query = row ? scopedQuery : { platform: BLACKLIST_PLATFORM, guildId: target?.guildId ?? normalizedGuildId };
-    if (!target) return false;
+    const hit = await findScopedRow(ctx, 'self_left_guild', 'guildId', BLACKLIST_PLATFORM, guildId, selfId);
+    if (!hit) return false;
     // 无论超不超时都清理，防止堆积
-    await ctx.database.remove('self_left_guild', query);
-    return (Math.floor(Date.now() / 1000) - target.timestamp) <= maxAgeSec;
+    await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: hit.storedId });
+    const row = hit.row as unknown as SelfLeftGuild;
+    return (Math.floor(Date.now() / 1000) - row.timestamp) <= maxAgeSec;
 }
 
-/** 清理标记（退群失败时回滚，或 unban 时清理）*/
+/** 清理标记（退群失败时回滚，或 unban 时清理） */
 export async function clearSelfLeft(ctx: Context, guildId: string, selfId?: string) {
-    const normalizedGuildId = normalizeId(guildId);
-    if (selfId) {
-        const normalizedSelfId = normalizeId(selfId);
-        await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: scopedId(guildId, normalizedSelfId) });
-        await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: normalizedGuildId });
-        const rows = await getRowsByNormalizedId(ctx, 'self_left_guild', 'guildId', BLACKLIST_PLATFORM, guildId);
-        for (const row of rows) {
-            if (!isScopedId(row.guildId)) {
-                await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: row.guildId });
-            }
-        }
-        return;
-    }
-
-    const rows = await ctx.database.get('self_left_guild', { platform: BLACKLIST_PLATFORM });
-    for (const row of rows) {
-        if (unscopedId(row.guildId) === normalizedGuildId) {
-            await ctx.database.remove('self_left_guild', { platform: BLACKLIST_PLATFORM, guildId: row.guildId });
-        }
-    }
+    await clearScopedRows(ctx, 'self_left_guild', 'guildId', BLACKLIST_PLATFORM, guildId, selfId);
 }
 
 /** 定期清理过期的主动退群标记（超过 maxAgeSec 秒未消费的）*/
@@ -444,46 +516,18 @@ export async function markApprovedGuild(ctx: Context, guildId: string, selfId: s
 
 export async function isApprovedGuild(ctx: Context, guildId: string, selfId: string): Promise<boolean> {
     selfId = normalizeId(selfId);
-    const records = await ctx.database.get('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: scopedId(guildId, selfId) });
-    if (records.length > 0) return true;
-    const legacyRecords = await ctx.database.get('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: normalizeId(guildId) });
-    if (legacyRecords.length > 0) return true;
-    const prefixedLegacyRecords = await getRowsByNormalizedId(ctx, 'approved_guild', 'guildId', BLACKLIST_PLATFORM, guildId);
-    return prefixedLegacyRecords.some(row => !isScopedId(row.guildId));
+    return (await findScopedRow(ctx, 'approved_guild', 'guildId', BLACKLIST_PLATFORM, guildId, selfId)) !== null;
 }
 
 export async function clearApprovedGuild(ctx: Context, guildId: string, selfId?: string) {
-    const normalizedGuildId = normalizeId(guildId);
-    if (selfId) {
-        await ctx.database.remove('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: scopedId(guildId, selfId) });
-        await ctx.database.remove('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: normalizedGuildId });
-        const rows = await getRowsByNormalizedId(ctx, 'approved_guild', 'guildId', BLACKLIST_PLATFORM, guildId);
-        for (const row of rows) {
-            if (!isScopedId(row.guildId)) {
-                await ctx.database.remove('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: row.guildId });
-            }
-        }
-        return;
-    }
-
-    const rows = await ctx.database.get('approved_guild', { platform: BLACKLIST_PLATFORM });
-    for (const row of rows) {
-        if (unscopedId(row.guildId) === normalizedGuildId) {
-            await ctx.database.remove('approved_guild', { platform: BLACKLIST_PLATFORM, guildId: row.guildId });
-        }
-    }
+    await clearScopedRows(ctx, 'approved_guild', 'guildId', BLACKLIST_PLATFORM, guildId, selfId);
 }
 
 // 待处理邀请管理
 export async function getPendingInvite(ctx: Context, platform: string, groupId: string, selfId: string) {
     selfId = normalizeId(selfId);
-    const records = await ctx.database.get('pending_invite', { platform, groupId: scopedId(groupId, selfId) });
-    if (records.length > 0) return decodePendingInvite(records[0]);
-    const legacyRecords = await ctx.database.get('pending_invite', { platform, groupId: normalizeId(groupId) });
-    if (legacyRecords.length > 0) return decodePendingInvite(legacyRecords[0]);
-    const prefixedLegacyRecords = await getRowsByNormalizedId(ctx, 'pending_invite', 'groupId', platform, groupId);
-    const prefixedLegacyRecord = prefixedLegacyRecords.find(row => !isScopedId(row.groupId));
-    return prefixedLegacyRecord ? decodePendingInvite(prefixedLegacyRecord) : null;
+    const hit = await findScopedRow(ctx, 'pending_invite', 'groupId', platform, groupId, selfId);
+    return hit ? decodePendingInvite(hit.row as unknown as PendingInvite) : null;
 }
 
 export async function addPendingInvite(ctx: Context, platform: string, selfId: string, inviteUser: Omit<PendingInvite, 'platform' | 'selfId'>) {
@@ -499,14 +543,7 @@ export async function addPendingInvite(ctx: Context, platform: string, selfId: s
 
 export async function removePendingInvite(ctx: Context, platform: string, groupId: string, selfId: string) {
     selfId = normalizeId(selfId);
-    await ctx.database.remove('pending_invite', { platform, groupId: scopedId(groupId, selfId) });
-    await ctx.database.remove('pending_invite', { platform, groupId: normalizeId(groupId) });
-    const rows = await getRowsByNormalizedId(ctx, 'pending_invite', 'groupId', platform, groupId);
-    for (const row of rows) {
-        if (!isScopedId(row.groupId)) {
-            await ctx.database.remove('pending_invite', { platform, groupId: row.groupId });
-        }
-    }
+    await clearScopedRows(ctx, 'pending_invite', 'groupId', platform, groupId, selfId);
 }
 
 export async function getAllPendingInvites(ctx: Context, platform: string, selfId: string) {
@@ -526,13 +563,8 @@ export async function clearExpiredPendingInvites(ctx: Context, platform: string,
 // 待处理好友申请管理
 export async function getPendingFriendRequest(ctx: Context, platform: string, selfId: string, userId: string) {
     selfId = normalizeId(selfId);
-    const records = await ctx.database.get('pending_friend_request', { platform, userId: scopedId(userId, selfId) });
-    if (records.length > 0) return decodePendingFriendRequest(records[0]);
-    const legacyRecords = await ctx.database.get('pending_friend_request', { platform, userId: normalizeId(userId) });
-    if (legacyRecords.length > 0) return decodePendingFriendRequest(legacyRecords[0]);
-    const prefixedLegacyRecords = await getRowsByNormalizedId(ctx, 'pending_friend_request', 'userId', platform, userId);
-    const prefixedLegacyRecord = prefixedLegacyRecords.find(row => !isScopedId(row.userId));
-    return prefixedLegacyRecord ? decodePendingFriendRequest(prefixedLegacyRecord) : null;
+    const hit = await findScopedRow(ctx, 'pending_friend_request', 'userId', platform, userId, selfId);
+    return hit ? decodePendingFriendRequest(hit.row as unknown as PendingFriendRequest) : null;
 }
 
 export async function addPendingFriendRequest(ctx: Context, platform: string, selfId: string, data: Omit<PendingFriendRequest, 'platform' | 'selfId'>) {
@@ -547,14 +579,7 @@ export async function addPendingFriendRequest(ctx: Context, platform: string, se
 
 export async function removePendingFriendRequest(ctx: Context, platform: string, selfId: string, userId: string) {
     selfId = normalizeId(selfId);
-    await ctx.database.remove('pending_friend_request', { platform, userId: scopedId(userId, selfId) });
-    await ctx.database.remove('pending_friend_request', { platform, userId: normalizeId(userId) });
-    const rows = await getRowsByNormalizedId(ctx, 'pending_friend_request', 'userId', platform, userId);
-    for (const row of rows) {
-        if (!isScopedId(row.userId)) {
-            await ctx.database.remove('pending_friend_request', { platform, userId: row.userId });
-        }
-    }
+    await clearScopedRows(ctx, 'pending_friend_request', 'userId', platform, userId, selfId);
 }
 
 export async function getAllPendingFriendRequests(ctx: Context, platform: string, selfId: string) {

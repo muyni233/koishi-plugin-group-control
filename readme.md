@@ -6,8 +6,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
 > 使用 AI Agent 协助完成
 
----
-
 ## 功能概览
 
 - **黑名单管理**：被踢出群后自动拉黑，下次被邀请时自动退出
@@ -76,13 +74,20 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `smallGroupAutoQuit` | `false` | 启用小群自动退群 |
-| `smallGroupThreshold` | `30` | 人数阈值，低于等于此值时自动退出 |
+| `smallGroupThreshold` | `30` | 人数阈值，真人数 ≤ 此值即判为小群 |
 | `smallGroupExcludeOfficialBots` | `true` | 统计群人数时排除 QQ 官方机器人（`is_robot`）及机器人自身，仅统计真人成员 |
-| `smallGroupRealtimeMonitor` | `true` | 实时监控群人数：监听成员退群事件，群缩小到阈值以下时自动退群（仅监控未经审核拉入的群） |
-| `smallGroupRecheckCooldown` | `60` | 实时监控时同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调用接口 |
+| `smallGroupCheckDelay` | `3000` | 加入后延迟检测的时间（毫秒），等待成员列表就绪 |
 | `smallGroupQuitMessage` | *(见配置)* | 退群提示，支持 `{memberCount}`, `{threshold}`, `{groupName}`, `{groupId}` |
 | `smallGroupNotifyAdmin` | `true` | 自动退群时通知管理员 |
-| `smallGroupCheckDelay` | `3000` | 加入后延迟检测的时间（毫秒） |
+
+**实时小群监控**
+
+监听成员退群事件，群缩小到阈值以下时自动退群；仅监控未经审核被拉入的群（详见[注意事项](#注意事项)）。
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `smallGroupRealtimeMonitor` | `true` | 启用实时监控：监听成员退群事件，群缩小到阈值以下时自动退群 |
+| `smallGroupRecheckCooldown` | `60` | 同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调用接口 |
 
 **合格小群通知**
 
@@ -186,7 +191,7 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
 所有管理员指令统一收纳在 `gc` 主指令下，输入 `gc` 可查看子指令列表。
 
-#### 目标解析
+### 目标解析
 
 `gc.approve`/`gc.reject`/`gc.ban`/`gc.unban`/`gc.leave`/`gc.sg-add`/`gc.sg-rm`/`gc.del` 的「目标」均可用以下方式指定，按优先级生效：
 
@@ -225,7 +230,9 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `gc.groups` | 列出机器人所在的群（合并转发形式发送） |
 | `gc.leave [目标]` | 退出指定群（可引用群通知，或加 `group:` 前缀） |
 
-### 群聊管理
+### 群聊管理指令
+
+非 `gc` 前缀的群级指令：
 
 | 指令 | 说明 | 权限 |
 |------|------|------|
@@ -237,11 +244,11 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
 ## 注意事项
 
-- 本插件仅支持 **OneBot 适配器**（如 go-cqhttp、LLOneBot 等）
-- 管理员通知默认私聊首个（0号）主管理员；填写 `admin.notificationGroupId` 后改发到该群。未配置主管理员且未填通知群号时无法收到通知
-- **引用解析依赖关键字**：引用机器人通知来执行 `gc.approve`/`gc.ban` 等指令时，靠通知文案里的 `群号：` / `好友申请`+`QQ：` 字样定位目标。自定义 `inviteRequestMessage`、`kickNotificationMessage`、`smallGroupQualifiedMessage`、`muteNotificationMessage` 等模板时需保留这些字样（如 `群号：{groupId}`），否则引用解析会失效
-- 频率控制的非指令拦截（@ 对话、私聊）不影响入群欢迎等系统事件
-- 小群合格通知仅在启用了 `smallGroupAutoQuit` 且未经 `gc.approve` 审核通过的情况下触发
-- **小群人数统计**：开启 `smallGroupExcludeOfficialBots` 后只计真人成员（排除 `is_robot` 机器人与自身）。检测做了分级短路以减少接口调用——原始人数 ≤ 阈值直接退群、原始人数 > 阈值 + 20（单群机器人上限）直接保留，仅当人数处于中间区间时才拉取一次成员列表，且统计到足够机器人即提前结束遍历
-- **号段判定模式（调试用）**：适配器 `is_robot` 字段不准时，开启 `smallGroupRobotUinRangeMode` 改用 `get_robot_uin_range` 号段区间判定官方机器人；接口不可用时自动回退 `is_robot`
-- **实时小群监控**：纯事件驱动（仅监听成员退群），不做轮询，配合 per-群冷却限流，几乎不增加接口压力。**经 `gc.approve` 审核通过或在小群白名单中的群永久豁免**，仅监控未经审核被拉入的群；机器人退出某群后其审核标记自动清除，若日后被未经审核地重新拉入会重新接受检测
+- 本插件仅支持 **OneBot 适配器**（如 NapCat、LLOneBot 等）。
+- **通知投递**：管理员通知默认私聊首个（0号）主管理员；填写 `admin.notificationGroupId` 后改发到该群。未配置主管理员且未填通知群号时无法收到通知。
+- **引用解析依赖关键字**：引用机器人通知来执行 `gc.approve`/`gc.ban` 等指令时，靠通知文案里的 `群号：` / `好友申请`+`QQ：` 字样定位目标。自定义 `inviteRequestMessage`、`kickNotificationMessage`、`smallGroupQualifiedMessage`、`muteNotificationMessage` 等模板时需保留这些字样（如 `群号：{groupId}`），否则引用解析会失效。
+- **频率控制的非指令拦截**（@ 对话、私聊）不影响入群欢迎等系统事件。
+- **小群合格通知**仅在启用了 `smallGroupAutoQuit` 且未经 `gc.approve` 审核通过的情况下触发。
+- **小群人数统计**：开启 `smallGroupExcludeOfficialBots` 后只计真人成员（排除 `is_robot` 机器人与自身）。检测做了分级短路以减少接口调用——原始人数 ≤ 阈值直接退群、原始人数 > 阈值 + 20（单群机器人上限）直接保留，仅当人数处于中间区间时才拉取一次成员列表，且统计到足够机器人即提前结束遍历。
+- **号段判定模式（调试用）**：适配器 `is_robot` 字段不准时，开启 `smallGroupRobotUinRangeMode` 改用 `get_robot_uin_range` 号段区间判定官方机器人；接口不可用时自动回退 `is_robot`。
+- **实时小群监控**：纯事件驱动（仅监听成员退群），不做轮询，配合 per-群冷却限流，几乎不增加接口压力。**经 `gc.approve` 审核通过或在小群白名单中的群永久豁免**，仅监控未经审核被拉入的群；机器人退出某群后其审核标记自动清除，若日后被未经审核地重新拉入会重新接受检测。

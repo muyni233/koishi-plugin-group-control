@@ -166,10 +166,3 @@ export function getMemberUserId(m: OneBotMember | null | undefined): string {
     if (raw == null) return ''
     return parseGuildId(String(raw)) ?? String(raw)
 }
-
-/** 判定一个群成员是否应被视为「机器人」：QQ 官方机器人 (is_robot) 或 bot 自身。仅认 is_robot 字段。 */
-export function isBotMember(m: OneBotMember | null | undefined, selfId: string | null): boolean {
-    if (!m) return false
-    if (selfId && getMemberUserId(m) === selfId) return true
-    return m.is_robot === true
-}

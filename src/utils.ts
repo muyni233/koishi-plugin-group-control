@@ -79,16 +79,21 @@ export function parseTargetArg(input: string | undefined | null): ParsedTargetAr
     return bare ? { bare } : null
 }
 
-/** 通知管理员：优先发到通知群，否则私聊首个（0号）主管理员。 */
+/**
+ * 通知管理员：优先发到通知群，否则私聊首个（0号）主管理员。
+ *
+ * 配了 notificationGroupId 时只发通知群，群发失败即止——不回落私聊，
+ * 避免群发已部分成功后又私聊造成「群发了、私聊也发了」的重复打扰。
+ */
 export async function notifyAdmins(ctx: Context, bot: Bot, config: Config, message: string): Promise<void> {
     const logger = createLogger(ctx, 'group-control:notify')
     if (config.admin.notificationGroupId) {
         try {
             await bot.sendMessage(config.admin.notificationGroupId, message)
-            return
         } catch (err) {
             logger.warn(`发送通知到通知群 ${config.admin.notificationGroupId} 失败`, err)
         }
+        return
     }
     const primary = config.admin.primaryAdmins?.[0]
     if (primary) {
