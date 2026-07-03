@@ -1,27 +1,11 @@
 import { Context, Session } from 'koishi'
-import { getQuotedText, parseQuotedTarget, parseTargetArg, type ResolvedTarget } from './utils'
-import { asOneBotBot, getBotSelfId, OneBotFriend, OneBotGroupInfo } from './types'
+import { getQuotedText, parseQuotedTarget, parseTargetArg, type ResolvedTarget, type TargetDomain } from './utils'
+import { getBotSelfId } from './types'
 import {
     getPendingInvite, getPendingFriendRequest, getAllPendingInvites, getAllPendingFriendRequests,
 } from './database'
 
 export type ResolveResult = { ok: true, target: ResolvedTarget } | { ok: false, message: string }
-
-/** 号码是否为当前好友 */
-async function isFriend(session: Session, userId: string): Promise<boolean> {
-    try {
-        const list = await asOneBotBot(session.bot).internal.getFriendList() as OneBotFriend[]
-        return list.some(f => String(f.user_id ?? f.userId ?? '') === userId)
-    } catch { return false }
-}
-
-/** 号码是否为机器人所在群 */
-async function isInGroup(session: Session, groupId: string): Promise<boolean> {
-    try {
-        const list = await asOneBotBot(session.bot).internal.getGroupList() as OneBotGroupInfo[]
-        return list.some(g => String(g.group_id ?? g.groupId ?? '') === groupId)
-    } catch { return false }
-}
 
 /**
  * approve/reject 目标：合法参数 > 引用通知 > 单条自动选用。
@@ -78,26 +62,34 @@ export async function resolveBanTarget(session: Session, arg: string | undefined
 }
 
 /**
- * del 目标：合法参数（裸号自动识别好友/所在群，两者都是则询问）> 引用通知。
- * 规则：只匹配到好友→删好友；只匹配到所在群→退群；两者都匹配→提示加前缀；都没匹配→提示加前缀。
+ * 域固定指令（gc.leave/gc.sg-add/gc.sg-rm 处理群，gc.del 处理好友）目标解析：
+ * 合法参数（裸号按 domain 处理）> 引用通知（域须匹配，跨域给出明确提示）。
+ * 与 approve/reject/ban/unban 的区别：不自动识别域——这些指令的域由指令本身决定。
  */
-export async function resolveDelTarget(session: Session, arg: string | undefined): Promise<ResolveResult> {
+export function resolveFixedTarget(session: Session, arg: string | undefined, domain: TargetDomain): ResolveResult {
     if (arg) {
         const p = parseTargetArg(arg)
         if (p) {
-            if ('domain' in p) return { ok: true, target: p }
-            const id = p.bare
-            const friend = await isFriend(session, id)
-            const group = await isInGroup(session, id)
-            if (friend && group) {
-                return { ok: false, message: `号码 ${id} 同时是你的好友和你所在的群，请加前缀区分：group:${id}（退群）/ friend:${id}（删好友）。` }
+            if ('domain' in p) {
+                if (p.domain !== domain) {
+                    const want = domain === 'group' ? '群聊' : '好友'
+                    return { ok: false, message: `该指令仅处理${want}，请使用 ${domain}:${p.id}。` }
+                }
+                return { ok: true, target: p }
             }
-            if (friend) return { ok: true, target: { domain: 'friend', id } }
-            if (group) return { ok: true, target: { domain: 'group', id } }
-            return { ok: false, message: `号码 ${id} 既不是你的好友，也不在你所在的群，请加前缀 group:${id} 或 friend:${id} 明确。` }
+            return { ok: true, target: { domain, id: p.bare } }
         }
+        // 参数不是合法号码（可能是回复带上的被引用文本）→ 落到引用解析
     }
     const q = parseQuotedTarget(getQuotedText(session))
-    if (q) return { ok: true, target: q }
-    return { ok: false, message: '请指定群号/QQ号，或引用对应的通知消息。' }
+    if (q) {
+        if (q.domain !== domain) {
+            const quoted = q.domain === 'group' ? '群聊' : '好友'
+            const want = domain === 'group' ? '群聊' : '好友'
+            return { ok: false, message: `引用的通知是${quoted}，但本指令仅处理${want}。` }
+        }
+        return { ok: true, target: q }
+    }
+    const label = domain === 'group' ? '群号' : 'QQ号'
+    return { ok: false, message: `请指定${label}，或引用对应的通知消息。` }
 }

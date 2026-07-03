@@ -135,7 +135,7 @@ export const Config: Schema<Config> = Schema.intersect([
             kickNotificationMessage: Schema.string().role('textarea').default('机器人已被踢出群聊\n群名称：{groupName}\n群号：{groupId}\n该群已被自动加入黑名单。').description('被踢出群通知模板，支持变量 {groupId}, {groupName}'),
             // —— 小群自动退群 ——
             smallGroupAutoQuit: Schema.boolean().default(false).description('启用小群自动退群'),
-            smallGroupThreshold: Schema.natural().default(30).description('小群人数阈值（真人数 ≤ 此值即判为小群）'),
+            smallGroupThreshold: Schema.natural().min(1).default(30).description('小群人数阈值（真人数 ≤ 此值即判为小群）'),
             smallGroupExcludeOfficialBots: Schema.boolean().default(true).description('统计人数时排除 QQ 官方机器人（is_robot）及机器人自身，仅统计真人'),
             smallGroupCheckDelay: Schema.natural().default(3000).description('入群后延迟检测的时间（毫秒），等待成员列表就绪'),
             smallGroupQuitMessage: Schema.string().role('textarea').default('该群人数过少（{memberCount}人），不满足最低人数要求（{threshold}人），机器人将自动退出。').description('小群退群提示，支持变量 {memberCount}, {threshold}, {groupName}, {groupId}'),

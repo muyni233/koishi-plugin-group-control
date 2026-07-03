@@ -3,11 +3,11 @@ import { Config } from '../config'
 import {
     isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission,
 } from '../utils'
-import { parseGuildId, toOneBotNumber, formatDate } from '../utils-id'
+import { toOneBotNumber, formatDate } from '../utils-id'
 import { asOneBotBot, getBotSelfId, OneBotBot, OneBotForwardNode, OneBotFriend, OneBotGroupInfo, OneBotMember } from '../types'
 import { createLogger, errorMessage, isVerbose } from '../logger'
 import { handleInviteRequest } from './invite'
-import { resolvePendingTarget, resolveBanTarget, resolveDelTarget } from '../resolver'
+import { resolvePendingTarget, resolveBanTarget, resolveFixedTarget } from '../resolver'
 import {
     getAllBlacklistedGuilds, getBlacklistedGuild, createBlacklistedGuild, clearBlacklistedGuilds, removeBlacklistedGuild,
     getAllBlacklistedFriends, createBlacklistedFriend, removeBlacklistedFriend,
@@ -194,37 +194,6 @@ async function doUnban(ctx: Context, config: Config, session: Session, arg: stri
     return removed ? `已移除好友 ${id} 的黑名单。` : `好友 ${id} 不在黑名单中。`
 }
 
-/** 删除好友 / 退出指定群 */
-async function doDel(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
-    if (!hasAdminPermission(session, config)) return '权限不足。'
-    const r = await resolveDelTarget(session, arg)
-    if (!r.ok) return r.message
-    const id = r.target.id
-
-    if (r.target.domain === 'group') {
-        const bot = asOneBotBot(session.bot)
-        const selfId = getBotSelfId(bot)
-        if (!selfId) return '无法识别当前机器人账号，已取消退群。'
-        await markSelfLeft(ctx, id, selfId)
-        try {
-            const groupId = toOneBotNumber(id)
-            if (groupId == null) throw new Error('无效群号')
-            await bot.internal.setGroupLeave(groupId)
-            return `已退出群 ${id}。`
-        } catch (err) {
-            await clearSelfLeft(ctx, id, selfId)
-            return `退出群 ${id} 失败：${errorMessage(err)}`
-        }
-    }
-
-    try {
-        await deleteFriendCompat(session, id)
-        return `已删除好友 ${id}。`
-    } catch (err) {
-        return `删除好友失败：${errorMessage(err)}`
-    }
-}
-
 export function apply(ctx: Context, config: Config) {
     const cmdOpts = getAdminCommandOptions(config)
     const logger = createLogger(ctx, SCOPE, config)
@@ -296,23 +265,25 @@ export function apply(ctx: Context, config: Config) {
         })
 
     // 小群白名单
-    ctx.command('gc.sg-add <groupId:text>', '解除小群人数限制', cmdOpts)
-        .action(async ({ session }, input) => {
+    ctx.command('gc.sg-add [target:string]', '解除小群人数限制', cmdOpts)
+        .action(async ({ session }, target) => {
             if (!session) return ''
             if (!hasAdminPermission(session, config)) return '权限不足。'
-            const guildId = parseGuildId(input)
-            if (!guildId) return '输入格式错误，请输入群号。'
+            const r = resolveFixedTarget(session, target, 'group')
+            if (!r.ok) return r.message
+            const guildId = r.target.id
             const exists = await isInSmallGroupWhitelist(ctx, guildId)
             if (exists) return `群聊 ${guildId} 已在小群白名单中。`
             await addToSmallGroupWhitelist(ctx, guildId)
             return `已将群聊 ${guildId} 加入小群白名单。`
         })
-    ctx.command('gc.sg-rm <groupId:text>', '恢复小群人数限制', cmdOpts)
-        .action(async ({ session }, input) => {
+    ctx.command('gc.sg-rm [target:string]', '恢复小群人数限制', cmdOpts)
+        .action(async ({ session }, target) => {
             if (!session) return ''
             if (!hasAdminPermission(session, config)) return '权限不足。'
-            const guildId = parseGuildId(input)
-            if (!guildId) return '输入格式错误，请输入群号。'
+            const r = resolveFixedTarget(session, target, 'group')
+            if (!r.ok) return r.message
+            const guildId = r.target.id
             const exists = await isInSmallGroupWhitelist(ctx, guildId)
             if (!exists) return `群聊 ${guildId} 不在小群白名单中。`
             await removeFromSmallGroupWhitelist(ctx, guildId)
@@ -347,8 +318,42 @@ export function apply(ctx: Context, config: Config) {
             }))
             return ''
         })
-    ctx.command('gc.del [target:string]', '删除好友/退出群聊', cmdOpts)
-        .action(async ({ session }, target) => { if (!session) return ''; return doDel(ctx, config, session, target) })
+    ctx.command('gc.del [target:string]', '删除好友', cmdOpts)
+        .action(async ({ session }, target) => {
+            if (!session) return ''
+            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const r = resolveFixedTarget(session, target, 'friend')
+            if (!r.ok) return r.message
+            const userId = r.target.id
+            try {
+                await deleteFriendCompat(session, userId)
+                return `已删除好友 ${userId}。`
+            } catch (err) {
+                return `删除好友失败：${errorMessage(err)}`
+            }
+        })
+    ctx.command('gc.leave [target:string]', '退出指定群', cmdOpts)
+        .action(async ({ session }, target) => {
+            if (!session) return ''
+            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const r = resolveFixedTarget(session, target, 'group')
+            if (!r.ok) return r.message
+            const guildId = r.target.id
+            const bot = asOneBotBot(session.bot)
+            const selfId = getBotSelfId(bot)
+            if (!selfId) return '无法识别当前机器人账号，已取消退群。'
+            await markSelfLeft(ctx, guildId, selfId)
+            try {
+                const groupId = toOneBotNumber(guildId)
+                if (groupId == null) throw new Error('无效群号')
+                await bot.internal.setGroupLeave(groupId)
+                return `已退出群 ${guildId}。`
+            } catch (err) {
+                await clearSelfLeft(ctx, guildId, selfId)
+                logger.warn(`退出群 ${guildId} 失败`, err)
+                return `退出群 ${guildId} 失败：${errorMessage(err)}`
+            }
+        })
     ctx.command('gc.groups', '查看群列表', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''

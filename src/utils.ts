@@ -287,7 +287,7 @@ export const ADMIN_COMMANDS = new Set([
     'gc', 'gc.banlist', 'gc.unban', 'gc.ban', 'gc.clearban',
     'gc.approve', 'gc.reject', 'gc.pending',
     'gc.sg-add', 'gc.sg-rm', 'gc.sg-list',
-    'gc.friends', 'gc.del', 'gc.groups',
+    'gc.friends', 'gc.del', 'gc.groups', 'gc.leave',
     'gc.debug', 'gc.debug.member-list', 'gc.debug.member', 'gc.debug.raw',
 ])
 
