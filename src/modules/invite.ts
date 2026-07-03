@@ -125,7 +125,7 @@ export function apply(ctx: Context, config: Config) {
         let userName = userId
         try {
             const userInfo = await bot.getUser(userId)
-            userName = userInfo?.nickname || userInfo?.name || userId
+            userName = userInfo?.name || userInfo?.nick || userId
         } catch (err) {
             logger.warn(`获取用户信息失败 userId=${userId}`, err)
         }

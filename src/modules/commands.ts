@@ -71,6 +71,16 @@ async function deleteFriendCompat(session: Session, userId: string): Promise<voi
     }
 }
 
+/** bot 是否仍在指定群内 */
+async function isBotInGroup(bot: OneBotBot, guildId: string): Promise<boolean> {
+    try {
+        const list = await bot.internal.getGroupList() as OneBotGroupInfo[]
+        return list.some(g => String(g.group_id ?? g.groupId ?? '') === guildId)
+    } catch {
+        return false
+    }
+}
+
 // ── 统一动作 ──────────────────────────────────────────────
 
 async function doApprove(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
@@ -157,7 +167,24 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
         const existing = await getBlacklistedGuild(ctx, id)
         if (existing.length > 0) return `群聊 ${id} 已在黑名单中。`
         await createBlacklistedGuild(ctx, id, 'manual_add')
-        return `已添加群聊 ${id} 到黑名单。`
+
+        const bot = asOneBotBot(session.bot)
+        const selfId = getBotSelfId(bot)
+        let note = ''
+        if (selfId && await isBotInGroup(bot, id)) {
+            try { await bot.sendMessage(id, config.basic.blacklistMessage, session.platform) } catch { /* 群内提示失败忽略 */ }
+            await markSelfLeft(ctx, id, selfId)
+            try {
+                const gid = toOneBotNumber(id)
+                if (gid == null) throw new Error('无效群号')
+                await bot.internal.setGroupLeave(gid)
+                note = '，机器人已退出该群'
+            } catch (err) {
+                await clearSelfLeft(ctx, id, selfId)
+                note = `（退出失败：${errorMessage(err)}）`
+            }
+        }
+        return `已添加群聊 ${id} 到黑名单${note}。`
     }
 
     await createBlacklistedFriend(ctx, id, 'manual_add')
