@@ -1,6 +1,6 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl } from '../utils'
+import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl, buildVars } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
     asOneBotBot, OneBotBot, OneBotInternalRaw, OneBotMember,
@@ -47,6 +47,33 @@ async function getGroupName(bot: OneBotBot, guildId: string, logger: ScopedLogge
         logger.debug(`getGuild 失败 guildId=${guildId} ${errorMessage(err)}`)
     }
     return '未知'
+}
+
+/** 尝试获取用户展示名（优先群名片/昵称，回退陌生人昵称，再回退 QQ 号），失败时返回空串。 */
+async function getUserName(bot: OneBotBot, userId: string, guildId: string | null, logger: ScopedLogger): Promise<string> {
+    const uin = toOneBotNumber(userId)
+    if (uin == null) return ''
+    // 优先群成员信息（能拿到群名片 card）
+    if (guildId) {
+        const gid = toOneBotNumber(guildId)
+        if (gid != null) {
+            try {
+                const m = await bot.internal.getGroupMemberInfo(gid, uin)
+                const name = m?.card || m?.nickname
+                if (name) return name
+            } catch (err) {
+                logger.debug(`getGroupMemberInfo 失败 userId=${userId} ${errorMessage(err)}`)
+            }
+        }
+    }
+    // 回退陌生人信息
+    try {
+        const info = await bot.internal.getStrangerInfo(uin)
+        if (info?.nickname) return info.nickname
+    } catch (err) {
+        logger.debug(`getStrangerInfo 失败 userId=${userId} ${errorMessage(err)}`)
+    }
+    return userId
 }
 
 /** 小群检测结果。count 为用于判定/展示的人数（排除官方机器人后为真人数） */
@@ -315,9 +342,9 @@ export function apply(ctx: Context, config: Config) {
         const selfId = getBotSelfId(bot) ?? ''
         const dedupKey = makeGuildKey(platform, selfId, guildId)
         const threshold = config.basic.smallGroupThreshold
-        const quitMsg = escapeTpl(config.basic.smallGroupQuitMessage, {
+        const quitMsg = escapeTpl(config.messages.smallGroupQuitMessage, buildVars({
             memberCount, threshold, groupName, groupId: guildId,
-        })
+        }))
         try {
             await bot.sendMessage(guildId, quitMsg, platform)
         } catch (err) {
@@ -326,8 +353,8 @@ export function apply(ctx: Context, config: Config) {
 
         if (config.basic.smallGroupNotifyAdmin) {
             const adminMsg = escapeTpl(
-                `小群自动退群\n群名称：{groupName}\n群号：${guildId}\n群成员数：${memberCount}人（阈值：${threshold}人）\n机器人已自动退出该群。`,
-                { groupName },
+                config.messages.smallGroupQuitNotificationMessage,
+                buildVars({ groupName, groupId: guildId, memberCount, threshold }),
             )
             await notifyAdmins(ctx, bot, config, adminMsg)
         }
@@ -346,7 +373,7 @@ export function apply(ctx: Context, config: Config) {
 
     /** 发送欢迎消息。bot-off（群开关关闭）时不发送——事件监听器不走中间件，需在此显式判断。 */
     async function sendWelcome(bot: OneBotBot, platform: string, guildId: string): Promise<void> {
-        if (!config.basic.welcomeMessage) return
+        if (!config.messages.welcomeMessage) return
         // bot-off 时阻止主动欢迎（与 bot-off 文案承诺一致）
         if (config.botSwitch?.enabled) {
             const status = await getGroupBotStatus(ctx, platform, guildId)
@@ -354,7 +381,7 @@ export function apply(ctx: Context, config: Config) {
             if (!isBotEnabled) return
         }
         try {
-            await bot.sendMessage(guildId, config.basic.welcomeMessage, platform)
+            await bot.sendMessage(guildId, config.messages.welcomeMessage, platform)
         } catch (err) {
             logger.warn(`欢迎消息发送失败 guildId=${guildId}`, err)
         }
@@ -381,7 +408,7 @@ export function apply(ctx: Context, config: Config) {
             const [blacklisted] = await getBlacklistedGuild(ctx, guildId)
             if (blacklisted) {
                 try {
-                    await bot.sendMessage(guildId, config.basic.blacklistMessage, platform)
+                    await bot.sendMessage(guildId, config.messages.blacklistMessage, platform)
                 } catch (err) {
                     logger.debug(`黑名单提示发送失败 guildId=${guildId} ${errorMessage(err)}`)
                 }
@@ -424,11 +451,11 @@ export function apply(ctx: Context, config: Config) {
                         if (res.decision === 'keep' && config.basic.smallGroupQualifiedNotifyAdmin) {
                             let groupName = res.groupName
                             if (groupName === '未知') groupName = await getGroupName(bot, guildId, logger)
-                            const qualifiedMsg = escapeTpl(config.basic.smallGroupQualifiedMessage, {
+                            const qualifiedMsg = escapeTpl(config.messages.smallGroupQualifiedMessage, buildVars({
                                 groupName, groupId: guildId,
                                 memberCount: res.count,
                                 threshold: config.basic.smallGroupThreshold,
-                            })
+                            }))
                             await notifyAdmins(ctx, bot, config, qualifiedMsg)
                         }
                     } catch (err) {
@@ -545,9 +572,9 @@ export function apply(ctx: Context, config: Config) {
         // 8) 通知管理员（独立于 enableBlacklist 的开关）
         if (config.basic.notifyAdminOnKick) {
             const groupName = await getGroupName(bot, guildId, logger)
-            const kickMsg = escapeTpl(config.basic.kickNotificationMessage, {
+            const kickMsg = escapeTpl(config.messages.kickNotificationMessage, buildVars({
                 groupId: guildId, groupName,
-            })
+            }))
             await notifyAdmins(ctx, bot, config, kickMsg)
         }
     })
@@ -566,15 +593,16 @@ export function apply(ctx: Context, config: Config) {
             const { platform } = session
             const guildId = parseGuildId(session.guildId)
             if (!guildId) return
-            const operatorId = sessionExt.operatorId || '未知'
+            const userId = sessionExt.operatorId || ''
             const duration = sessionExt.duration ?? 0
             const groupName = await getGroupName(bot, guildId, logger)
+            const userName = await getUserName(bot, userId, guildId, logger)
 
             // 被禁言时长达到阈值：自动退群并拉黑（优先于普通通知）
             if (config.basic.muteAutoQuit && duration >= config.basic.muteAutoQuitThreshold) {
-                const quitMsg = escapeTpl(config.basic.muteQuitNotificationMessage, {
-                    groupId: guildId, groupName, operatorId, duration,
-                })
+                const quitMsg = escapeTpl(config.messages.muteQuitNotificationMessage, buildVars({
+                    groupId: guildId, groupName, userId, userName, duration,
+                }))
                 await notifyAdmins(ctx, bot, config, quitMsg)
 
                 // 拉入黑名单（reason='muted'，避免被 guild-removed 当作被踢重复处理）
@@ -600,9 +628,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 普通被禁言通知
             if (config.basic.notifyAdminOnMute) {
-                const msg = escapeTpl(config.basic.muteNotificationMessage, {
-                    groupId: guildId, groupName, operatorId, duration,
-                })
+                const msg = escapeTpl(config.messages.muteNotificationMessage, buildVars({
+                    groupId: guildId, groupName, userId, userName, duration,
+                }))
                 await notifyAdmins(ctx, bot, config, msg)
             }
         })
@@ -632,18 +660,19 @@ export function apply(ctx: Context, config: Config) {
 
                 // 获取群名称（此时还在群内，应该能拿到）
                 const groupName = await getGroupName(bot, guildId, logger)
+                const userName = await getUserName(bot, userId, guildId, logger)
 
                 // 通知管理员
                 const adminMsg = escapeTpl(
-                    `收到来自 ${userId} 的退群指令\n群名称：{groupName}\n群号：${guildId}`,
-                    { groupName },
+                    config.messages.quitCommandNotificationMessage,
+                    buildVars({ userId, userName, groupName, groupId: guildId }),
                 )
                 await notifyAdmins(ctx, bot, config, adminMsg)
 
                 quittingGuilds.set(dedupKey, Date.now())
                 await markSelfLeft(ctx, guildId, selfId)
                 try {
-                    await bot.sendMessage(session.guildId, escapeTpl(config.basic.quitMessage, { userId }), platform)
+                    await bot.sendMessage(session.guildId, escapeTpl(config.messages.quitMessage, buildVars({ userId, userName })), platform)
                 } catch (err) {
                     logger.debug(`quit 群内提示发送失败 guildId=${guildId} ${errorMessage(err)}`)
                 }

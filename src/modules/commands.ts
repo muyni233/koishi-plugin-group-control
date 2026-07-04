@@ -1,7 +1,7 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import {
-    isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission, escapeTpl,
+    isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission, escapeTpl, buildVars,
 } from '../utils'
 import { toOneBotNumber, formatDate } from '../utils-id'
 import { asOneBotBot, getBotSelfId, OneBotBot, OneBotForwardNode, OneBotFriend, OneBotGroupInfo, OneBotMember } from '../types'
@@ -111,7 +111,7 @@ async function doApprove(ctx: Context, config: Config, session: Session, arg: st
         try {
             await handleInviteRequest(bot, inviteData.flag, true)
             await markApprovedGuild(ctx, groupId, selfId)
-            try { await bot.sendPrivateMessage(inviteData.userId, '您的群聊邀请已通过管理员审核，机器人已加入群聊。') } catch { /* 忽略 */ }
+            try { await bot.sendPrivateMessage(inviteData.userId, escapeTpl(config.messages.inviteApprovePrompt, buildVars({ groupId, userId: inviteData.userId, groupName: inviteData.groupName, userName: inviteData.userName }))) } catch { /* 忽略 */ }
             await removePendingInvite(ctx, session.platform, groupId, selfId)
             return `已同意加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`
         } catch (err) {
@@ -145,7 +145,7 @@ async function doReject(ctx: Context, config: Config, session: Session, arg: str
         if (!inviteData) return `未找到群号 ${groupId} 的待处理邀请。使用 gc.pending 查看列表。`
         try {
             await handleInviteRequest(bot, inviteData.flag, false, '已拒绝')
-            try { await bot.sendPrivateMessage(inviteData.userId, '您的群聊邀请未通过管理员审核，机器人将不会加入该群聊。') } catch { /* 忽略 */ }
+            try { await bot.sendPrivateMessage(inviteData.userId, escapeTpl(config.messages.inviteRejectPrompt, buildVars({ groupId, userId: inviteData.userId, groupName: inviteData.groupName, userName: inviteData.userName }))) } catch { /* 忽略 */ }
             await removePendingInvite(ctx, session.platform, groupId, selfId)
             return `已拒绝加入群 ${groupId}（${inviteData.groupName}），邀请者：${inviteData.userName}`
         } catch (err) {
@@ -181,7 +181,7 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
         const selfId = getBotSelfId(bot)
         let note = ''
         if (selfId && await isBotInGroup(bot, id)) {
-            try { await bot.sendMessage(id, config.basic.blacklistMessage, session.platform) } catch { /* 群内提示失败忽略 */ }
+            try { await bot.sendMessage(id, config.messages.blacklistMessage, session.platform) } catch { /* 群内提示失败忽略 */ }
             await markSelfLeft(ctx, id, selfId)
             try {
                 const gid = toOneBotNumber(id)
@@ -256,7 +256,7 @@ export function apply(ctx: Context, config: Config) {
                 invites.forEach((iv, i) => {
                     lines.push(escapeTpl(
                         `${i + 1}. {groupName}（${iv.groupId}）· 邀请者 {userName}（${iv.userId}）`,
-                        { groupName: iv.groupName, userName: iv.userName },
+                        buildVars({ groupName: iv.groupName, userName: iv.userName }),
                     ))
                 })
             }
@@ -266,7 +266,7 @@ export function apply(ctx: Context, config: Config) {
                     const comment = fr.comment || '无'
                     lines.push(escapeTpl(
                         `${i + 1}. {nickname}（${fr.userId}）· 附言：{comment}`,
-                        { nickname: fr.nickname, comment },
+                        buildVars({ userName: fr.nickname, comment }),
                     ))
                 })
             }

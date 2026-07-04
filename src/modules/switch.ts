@@ -111,9 +111,9 @@ export function apply(ctx: Context, config: Config) {
         if (!isBotEnabled) {
             // 检查是否有 @ 机器人
             const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs?.id === session.bot.userId)
-            if (isMentioned && config.botSwitch.disabledMessage) {
+            if (isMentioned && config.messages.botDisabledMessage) {
                 try {
-                    await session.send(config.botSwitch.disabledMessage)
+                    await session.send(config.messages.botDisabledMessage)
                 } catch (err) {
                     logger.warn('发送关闭提示失败', err)
                 }
@@ -142,9 +142,9 @@ export function apply(ctx: Context, config: Config) {
         }
         // 在已关闭状态下：检查是否有 @ 机器人
         const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs?.id === session.bot.userId)
-        if (isMentioned && config.botSwitch.disabledMessage) {
+        if (isMentioned && config.messages.botDisabledMessage) {
             try {
-                await session.send(config.botSwitch.disabledMessage)
+                await session.send(config.messages.botDisabledMessage)
             } catch { /* 忽略发送失败 */ }
         }
 

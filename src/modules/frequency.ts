@@ -3,7 +3,7 @@ import { Config } from '../config'
 import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequencyRecord } from '../database'
 import { parseGuildId } from '../utils-id'
 import { createLogger, errorMessage } from '../logger'
-import { escapeTpl, isAdminCommand } from '../utils'
+import { escapeTpl, isAdminCommand, buildVars } from '../utils'
 
 export const name = 'group-control-frequency'
 
@@ -147,6 +147,7 @@ export function apply(ctx: Context, config: Config) {
     const freq = config.frequency
     if (!freq.enabled && !freq.privateEnabled) return
     const logger = createLogger(ctx, SCOPE, config)
+    const msgs = config.messages
 
     const groupWhitelist = new Set((freq.whitelist ?? []).map(id => parseGuildId(id) ?? id))
     const privateWhitelist = new Set((freq.privateWhitelist ?? []).map(id => parseGuildId(id) ?? id))
@@ -175,7 +176,7 @@ export function apply(ctx: Context, config: Config) {
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
                 try {
-                    await session.send(freq.warnMsg)
+                    await session.send(msgs.frequencyWarnMessage)
                 } catch (err) {
                     logger.debug(`发送 warn 消息失败 ${errorMessage(err)}`)
                 }
@@ -183,7 +184,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'new-blocked') {
                 try {
-                    await session.send(escapeTpl(freq.blockMsg, { duration: r.dur }))
+                    await session.send(escapeTpl(msgs.frequencyBlockMessage, buildVars({ duration: r.dur })))
                 } catch (err) {
                     logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -191,7 +192,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'blocked') {
                 try {
-                    await session.send(escapeTpl(freq.blockedMsg, { time: r.remaining }))
+                    await session.send(escapeTpl(msgs.frequencyBlockedMessage, buildVars({ time: r.remaining })))
                 } catch (err) {
                     logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -215,7 +216,7 @@ export function apply(ctx: Context, config: Config) {
             if (r.result === 'ok') return true
             if (r.result === 'warn') {
                 try {
-                    await session.bot.sendMessage(guildId, freq.warnMsg, platform)
+                    await session.bot.sendMessage(guildId, msgs.frequencyWarnMessage, platform)
                 } catch (err) {
                     logger.debug(`发送 warn 消息失败 ${errorMessage(err)}`)
                 }
@@ -223,7 +224,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'new-blocked') {
                 try {
-                    await session.bot.sendMessage(guildId, escapeTpl(freq.blockMsg, { duration: r.dur }), platform)
+                    await session.bot.sendMessage(guildId, escapeTpl(msgs.frequencyBlockMessage, buildVars({ duration: r.dur })), platform)
                 } catch (err) {
                     logger.debug(`发送 new-blocked 消息失败 ${errorMessage(err)}`)
                 }
@@ -231,7 +232,7 @@ export function apply(ctx: Context, config: Config) {
             }
             if (r.result === 'blocked') {
                 try {
-                    await session.bot.sendMessage(guildId, escapeTpl(freq.blockedMsg, { time: r.remaining }), platform)
+                    await session.bot.sendMessage(guildId, escapeTpl(msgs.frequencyBlockedMessage, buildVars({ time: r.remaining })), platform)
                 } catch (err) {
                     logger.debug(`发送 blocked 消息失败 ${errorMessage(err)}`)
                 }

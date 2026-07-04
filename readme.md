@@ -2,40 +2,40 @@
 
 [![npm](https://img.shields.io/npm/v/koishi-plugin-group-control?style=flat-square)](https://www.npmjs.com/package/koishi-plugin-group-control)
 
-Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
+Koishi 多功能群聊自管理插件。仅支持 OneBot 适配器。
 
 > 使用 AI Agent 协助完成
 
 ## 功能概览
 
-- **黑名单管理**：被踢出群后自动拉黑，下次被邀请时自动退出
-- **小群自动退群**：加入人数不足的群时自动退出并通知管理员，统计人数时自动排除 QQ 官方机器人（仅计真人）
+- **黑名单管理**：被踢出群后自动拉黑，下次被邀请时自动拒绝或退出
+- **小群自动退群**：加入人数不足的群时自动退出，人数统计自动排除 QQ 官方机器人
 - **实时小群监控**：监听成员退群事件，群缩水到阈值以下时自动退出（仅针对未经审核拉入的群）
 - **合格小群通知**：未经审核被拉入人数达标的群时，通知管理员确认
-- **群聊邀请审核**：收到邀请时暂缓加入，等待管理员审核
+- **群聊邀请审核**：收到群聊邀请时通知管理员，或自动通过
 - **好友申请管理**：收到好友申请时通知管理员，或自动通过
 - **统一审核指令**：`gc.approve`/`gc.reject`/`gc.ban`/`gc.unban`/`gc.pending` 统一处理群邀请与好友申请，可引用机器人通知自动解析目标（也可加 `group:`/`friend:` 前缀）
 - **频率控制**：限制群聊/私聊的指令及对话频率，支持指数增长屏蔽时长
 - **Bot 开关**：按群独立开关 bot，关闭后屏蔽所有响应
 - **好友/群管理**：列出好友、删除好友、列出所在群、远程退出指定群
-- **被禁言通知**：bot 被禁言时可选通知管理员；被禁言时长达到阈值时可自动退群并拉黑
-- **权限管理**：主/副管理员分级；支持 Koishi authority 或内置群管理员两种权限模式
+- **被禁言处理**：被禁言时可选通知管理员；时长达到阈值时自动退群并拉黑
+- **权限管理**：主/副管理员分级；支持 Koishi authority 或内置群管理员两种模式
 
 ---
 
 ## 配置说明
 
-### 管理员配置
+配置分 9 个分类：管理员配置、权限管理、基础群组管理、频率控制、好友申请管理、群聊邀请审核、机器人开关、日志与调试、文案自定义。文案相关的项全部集中在[文案自定义](#文案自定义)，其余分类只含行为开关。
 
-管理员分为主管理员与副管理员，均可添加多个：
+### 管理员配置
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `admin.primaryAdmins` | `[]` | 主管理员QQ号列表（绕过群管理员指令校验；通知默认发给首个主管理员） |
-| `admin.deputyAdmins` | `[]` | 副管理员QQ号列表（可用 gc 指令，其它群管理员指令仍会校验身份） |
+| `admin.primaryAdmins` | `[]` | 主管理员 QQ 号列表（绕过群管理员指令校验；通知默认发给首个主管理员） |
+| `admin.deputyAdmins` | `[]` | 副管理员 QQ 号列表（可用 gc 指令，其它群管理员指令仍会校验身份） |
 | `admin.notificationGroupId` | *(空)* | 通知群号（填写后发到此群，否则私聊首个主管理员） |
 
-> 所有 `gc` 系列指令主、副管理员均可使用；主管理员额外可绕过 `bot-on`/`bot-off`/`quit` 等群级指令的群管理员身份校验。`koishi` 模式下不区分主副，由 `koishiAuthority` 决定。
+> `gc` 系列指令主、副管理员均可使用；主管理员额外可绕过 `bot-on`/`bot-off`/`quit` 等群级指令的群管理员身份校验。`koishi` 模式下不区分主副，由 `koishiAuthority` 决定。
 
 ### 权限管理
 
@@ -51,23 +51,14 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `welcomeMessage` | `你好，我是机器人。` | 加入群聊时发送的欢迎消息 |
-| `quitMessage` | `收到来自{userId}的指令，即将退出群聊。` | quit 指令触发后的群内提示，支持 `{userId}` |
 | `quitCommandEnabled` | `true` | 是否启用 quit 指令 |
 
-**黑名单**
+**黑名单 & 踢出通知**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `enableBlacklist` | `true` | 启用被踢出自动拉黑 |
-| `blacklistMessage` | *(见配置)* | 被拉入黑名单群后的提示 |
-
-**踢出通知**
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
 | `notifyAdminOnKick` | `true` | 被踢出时通知管理员 |
-| `kickNotificationMessage` | *(见配置)* | 通知消息模板，支持 `{groupId}`, `{groupName}` |
 
 **小群自动退群**
 
@@ -77,7 +68,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `smallGroupThreshold` | `30` | 人数阈值，真人数 ≤ 此值即判为小群 |
 | `smallGroupExcludeOfficialBots` | `true` | 统计群人数时排除 QQ 官方机器人（`is_robot`）及机器人自身，仅统计真人成员 |
 | `smallGroupCheckDelay` | `3000` | 加入后延迟检测的时间（毫秒），等待成员列表就绪 |
-| `smallGroupQuitMessage` | *(见配置)* | 退群提示，支持 `{memberCount}`, `{threshold}`, `{groupName}`, `{groupId}` |
 | `smallGroupNotifyAdmin` | `true` | 自动退群时通知管理员 |
 
 **实时小群监控**
@@ -94,17 +84,14 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `smallGroupQualifiedNotifyAdmin` | `true` | 未经审核被拉入人数达标的群时通知管理员 |
-| `smallGroupQualifiedMessage` | *(见配置)* | 通知消息模板，支持 `{groupName}`, `{groupId}`, `{memberCount}`, `{threshold}` |
 
-**被禁言通知**
+**被禁言处理**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `notifyAdminOnMute` | `false` | bot 被禁言时通知管理员 |
-| `muteNotificationMessage` | *(见配置)* | 通知消息模板，支持 `{groupId}`, `{groupName}`, `{operatorId}`, `{duration}` |
 | `muteAutoQuit` | `false` | bot 被禁言达到阈值时自动退群并拉黑 |
 | `muteAutoQuitThreshold` | `600` | 触发自动退群的禁言时长阈值（秒），被禁言时长 ≥ 此值即退群并拉黑 |
-| `muteQuitNotificationMessage` | *(见配置)* | 自动退群时发给管理员的通知模板，支持 `{groupId}`, `{groupName}`, `{operatorId}`, `{duration}` |
 
 ### 频率控制
 
@@ -128,7 +115,7 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `privateWindow` | `60` | 私聊时间窗口（秒） |
 | `privateWarnDelay` | `30` | 私聊警告后再次触发的时间阈值（秒） |
 | `privateBlockDur` | `300` | 私聊首次屏蔽的基础时长（秒） |
-| `privateWhitelist` | `[]` | 不受私聊频率限制的用户ID列表 |
+| `privateWhitelist` | `[]` | 不受私聊频率限制的用户 ID 列表 |
 
 **指数增长（群聊和私聊共用）**
 
@@ -136,15 +123,7 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 |--------|--------|------|
 | `blockExpBase` | `2` | 指数增长底数，每次屏蔽时长 = `blockDur × base^(次数-1)`，设为 `1` 禁用 |
 | `blockExpWindow` | `3600` | 指数增长重置窗口（秒），从最后一次屏蔽结束计算，超出则重置屏蔽次数 |
-
-**提示消息**
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
 | `blockNotifyCooldown` | `60` | 屏蔽期间重复触发时提示消息的冷却时间（秒），避免刷屏 |
-| `warnMsg` | `发言频率过高，请慢一点~` | 首次超限警告消息 |
-| `blockMsg` | `发言频率过高，已被禁用 {duration} 秒。` | 进入屏蔽时的通知，支持 `{duration}` |
-| `blockedMsg` | `暂时被禁用，还有 {time} 秒解禁。` | 屏蔽期间再次触发时的提示，支持 `{time}` |
 
 ### 好友申请管理
 
@@ -154,8 +133,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `autoApprove` | `false` | 自动通过好友申请，否则通知管理员手动处理 |
 | `notifyAdminOnApprove` | `true` | 自动通过时是否仍通知管理员 |
 | `requestExpireDays` | `7` | 待处理申请的过期天数 |
-| `requestMessage` | *(见配置)* | 通知管理员的消息模板，支持 `{userId}`, `{nickname}`, `{comment}` |
-| `approveNotificationMessage` | *(见配置)* | 自动通过时的通知消息模板，支持 `{userId}`, `{nickname}`, `{comment}` |
 
 ### 群聊邀请审核
 
@@ -164,10 +141,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 | `enabled` | `false` | 启用邀请审核 |
 | `autoApprove` | `false` | 自动同意邀请（无需管理员审核） |
 | `notifyAdminOnApprove` | `true` | 自动同意时是否仍通知管理员 |
-| `inviteWaitMessage` | *(见配置)* | 发给邀请者的等待提示，支持 `{groupName}`, `{groupId}`, `{userName}`, `{userId}` |
-| `inviteApproveMessage` | *(见配置)* | 自动同意时发给邀请者的提示，支持 `{groupName}`, `{groupId}`, `{userName}`, `{userId}` |
-| `inviteRequestMessage` | *(见配置)* | 发给管理员的请求消息，支持 `{groupName}`, `{groupId}`, `{userName}`, `{userId}` |
-| `inviteApproveNotificationMessage` | *(见配置)* | 自动同意时发给管理员的通知，支持 `{groupName}`, `{groupId}`, `{userName}`, `{userId}` |
 | `inviteExpireDays` | `3` | 邀请记录过期天数 |
 
 ### 机器人开关
@@ -176,7 +149,6 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 |--------|--------|------|
 | `enabled` | `true` | 启用群聊 bot 开关功能 |
 | `defaultState` | `true` | 默认开启状态 |
-| `disabledMessage` | *(见配置)* | 关闭状态下被 @ 时的提示 |
 
 ### 日志与调试
 
@@ -184,6 +156,59 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 |--------|--------|------|
 | `verbose` | `false` | 调试模式：开启后输出 debug 级别日志，并启用 `gc.debug` 接口测试指令 |
 | `smallGroupRobotUinRangeMode` | `false` | 调试用：小群检测改用 `get_robot_uin_range` 号段区间判定官方机器人（适配器 `is_robot` 字段失效时启用，接口不可用或调用失败时自动回退 `is_robot`） |
+
+### 文案自定义
+
+集中管理本插件所有出站提示/通知文案。模板变量用 `{key}` 形式，**所有文案共享同一套变量**——`{groupId}`/`{groupName}`（群号/群名）、`{userId}`/`{userName}`/`{nickname}`（用户 QQ/展示名，`userName` 与 `nickname` 同值）、`{comment}`（好友申请附言）、`{memberCount}`/`{threshold}`（小群人数/阈值）、`{duration}`（禁言秒数）、`{time}`（屏蔽剩余秒数）。外部输入自动 `h.escape` 转义。**引用机器人通知来执行 `gc.approve`/`gc.ban` 等指令时靠文案里的 `群号：` / `好友申请`+`QQ：` 字样定位目标——所有群相关通知都含 `群号：`、所有好友相关通知都含 `好友申请`+`QQ：`，自定义时务必保留这些字样。**
+
+**群内广播 / 退群提示**
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `welcomeMessage` | `大家好，我是本群的机器人，请多关照~` | 加入群聊时发送的欢迎消息 |
+| `quitMessage` | `收到 {userId} 的指令，机器人即将退出本群。` | quit 指令触发后的群内提示 |
+| `blacklistMessage` | `本群已被拉黑，机器人将自动退出。如有疑问，请联系管理员。` | 被拉入黑名单群后的群内提示 |
+| `smallGroupQuitMessage` | `本群人数不足（当前{memberCount}人，需≥{threshold}人），机器人即将退出本群，如有需求请联系管理员。` | 小群自动退群时的群内提示 |
+
+**给管理员的告警通知**
+
+| 配置项 | 说明 |
+|--------|------|
+| `kickNotificationMessage` | 机器人被踢后给管理员的通知 |
+| `smallGroupQuitNotificationMessage` | 小群自动退群时给管理员的通知 |
+| `smallGroupQualifiedMessage` | 合格小群给管理员的通知 |
+| `muteNotificationMessage` | 机器人被禁言后给管理员的通知 |
+| `muteQuitNotificationMessage` | 被禁言自动退群时给管理员的通知 |
+| `quitCommandNotificationMessage` | quit 指令触发时给管理员的通知 |
+| `inviteRequestMessage` | 收到群邀请时给管理员的请求通知 |
+| `inviteApproveNotificationMessage` | 自动同意群邀请后给管理员的通知 |
+| `inviteBlacklistRejectNotification` | 黑名单群邀请自动拒绝后给管理员的通知 |
+| `friendRequestMessage` | 收到好友申请时给管理员的通知 |
+| `friendApproveNotificationMessage` | 自动通过好友申请后给管理员的通知 |
+| `friendBlacklistRejectNotification` | 黑名单好友申请自动拒绝后给管理员的通知 |
+
+**给最终用户（邀请者/申请者）的提示**
+
+| 配置项 | 说明 |
+|--------|------|
+| `inviteWaitPrompt` | 人工审核时发给邀请者的等待提示 |
+| `inviteApprovePrompt` | 群邀请通过后发给邀请者的提示 |
+| `inviteRejectPrompt` | 群邀请被拒后发给邀请者的提示 |
+| `inviteBlacklistRejectPrompt` | 群邀请命中黑名单时发给邀请者的提示 |
+
+**频率控制提示**
+
+| 配置项 | 说明 |
+|--------|------|
+| `frequencyWarnMessage` | 频率首次超限时的警告消息 |
+| `frequencyBlockMessage` | 进入屏蔽时的通知 |
+| `frequencyBlockedMessage` | 屏蔽期间再次触发时的提示 |
+
+**Bot 开关提示**
+
+| 配置项 | 说明 |
+|--------|------|
+| `botDisabledMessage` | bot 关闭状态下被 @ 或触发受保护指令时的提示 |
 
 ---
 
@@ -196,7 +221,7 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 `gc.approve`/`gc.reject`/`gc.ban`/`gc.unban`/`gc.leave`/`gc.sg-add`/`gc.sg-rm`/`gc.del` 的「目标」均可用以下方式指定，按优先级生效：
 
 1. **带参数**：`gc.<指令> <号码>`。可加前缀强制区分域——`group:<号>`（群）/ `friend:<号>`（好友），简写 `g:` / `f:`、中文 `群:` / `好友:` 均可。
-2. **引用机器人通知**：回复（引用）机器人发的「收到新的群聊邀请请求」「收到新的好友申请」「已自动拒绝黑名单群邀请」「机器人被未经审核地拉入群聊」等通知，指令可不带参数。
+2. **引用机器人通知**：回复（引用）机器人发的任意通知消息（只要含 `群号：` 或 `好友申请`+`QQ：` 字样——所有群相关通知含前者、所有好友相关通知含后者），指令可不带参数，自动提取群号/QQ号。
 
 > - **自动识别**（仅 approve/reject/ban/unban）：裸号会从待处理请求里自动判断群/好友；ban/unban 的裸号默认按**群**。若同号同时命中群邀请与好友申请，会提示加前缀区分。
 > - **域固定指令**（`gc.leave`/`gc.sg-add`/`gc.sg-rm` 处理群，`gc.del` 处理好友）：裸号按各自域处理，引用通知时域须匹配，跨域引用会被拒绝并提示。
@@ -244,11 +269,11 @@ Koishi 插件，多功能群聊自管理工具。仅支持 OneBot 适配器。
 
 ## 注意事项
 
-- 本插件仅支持 **OneBot 适配器**（如 NapCat、LLOneBot 等）。
-- **通知投递**：管理员通知默认私聊首个（0号）主管理员；填写 `admin.notificationGroupId` 后改发到该群。未配置主管理员且未填通知群号时无法收到通知。
-- **引用解析依赖关键字**：引用机器人通知来执行 `gc.approve`/`gc.ban` 等指令时，靠通知文案里的 `群号：` / `好友申请`+`QQ：` 字样定位目标。自定义 `inviteRequestMessage`、`kickNotificationMessage`、`smallGroupQualifiedMessage`、`muteNotificationMessage` 等模板时需保留这些字样（如 `群号：{groupId}`），否则引用解析会失效。
-- **频率控制的非指令拦截**（@ 对话、私聊）不影响入群欢迎等系统事件。
-- **小群合格通知**仅在启用了 `smallGroupAutoQuit` 且未经 `gc.approve` 审核通过的情况下触发。
-- **小群人数统计**：开启 `smallGroupExcludeOfficialBots` 后只计真人成员（排除 `is_robot` 机器人与自身）。检测做了分级短路以减少接口调用——原始人数 ≤ 阈值直接退群、原始人数 > 阈值 + 20（单群机器人上限）直接保留，仅当人数处于中间区间时才拉取一次成员列表，且统计到足够机器人即提前结束遍历。
+- 仅支持 **OneBot 适配器**（如 NapCat、LLOneBot 等）。
+- **通知投递**：默认私聊首个（0号）主管理员；填写 `admin.notificationGroupId` 后改发到该群。两者都未配置时无法收到通知。
+- **引用解析**：执行 `gc.approve`/`gc.ban` 等指令时，引用（回复）机器人发的任意含 `群号：`（群）或 `好友申请`+`QQ：`（好友）字样的通知消息即可自动提取目标，无需手动传号码。
+- **频率控制**：非指令拦截（@ 对话、私聊）不影响入群欢迎等系统事件。
+- **小群合格通知**：仅在启用 `smallGroupAutoQuit` 且未经 `gc.approve` 审核通过时触发。
+- **小群人数统计**：开启 `smallGroupExcludeOfficialBots` 后只计真人成员（排除 `is_robot` 机器人与自身）。原始人数 ≤ 阈值直接退群、原始人数 > 阈值 + 20（单群机器人上限）直接保留，仅当人数处于中间区间时才拉取一次成员列表，且统计到足够机器人即提前结束遍历。
 - **号段判定模式（调试用）**：适配器 `is_robot` 字段不准时，开启 `smallGroupRobotUinRangeMode` 改用 `get_robot_uin_range` 号段区间判定官方机器人；接口不可用时自动回退 `is_robot`。
-- **实时小群监控**：纯事件驱动（仅监听成员退群），不做轮询，配合 per-群冷却限流，几乎不增加接口压力。**经 `gc.approve` 审核通过或在小群白名单中的群永久豁免**，仅监控未经审核被拉入的群；机器人退出某群后其审核标记自动清除，若日后被未经审核地重新拉入会重新接受检测。
+- **实时小群监控**：通过监听成员退群实现。**经 `gc.approve` 审核通过或在小群白名单中的群永久豁免**，仅监控未经审核被拉入的群；机器人退出某群后其审核标记自动清除，若日后被未经审核地重新拉入会重新接受检测。

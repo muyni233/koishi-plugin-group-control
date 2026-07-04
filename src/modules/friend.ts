@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, escapeTpl } from '../utils'
+import { notifyAdmins, escapeTpl, buildVars } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import { asOneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
@@ -43,23 +43,7 @@ export function apply(ctx: Context, config: Config) {
             return
         }
 
-        // 好友黑名单拦截：已拉黑的用户发来的申请一律自动拒绝
-        if (await getBlacklistedFriend(ctx, userId)) {
-            try {
-                await bot.internal.setFriendAddRequest(flag, false, '已被拉黑')
-            } catch (err) {
-                logger.warn('拒绝黑名单好友申请失败', err)
-            }
-            try {
-                await notifyAdmins(ctx, bot, config, `已自动拒绝黑名单好友申请\nQQ：${userId}`)
-            } catch (err) {
-                logger.warn('通知管理员（黑名单好友拒绝）失败', err)
-            }
-            logger.event('friend.auto-reject-blacklist', { userId })
-            return
-        }
-
-        // 获取昵称
+        // 获取昵称（先于黑名单判断获取，两分支都可用）
         let nickname = userId
         try {
             const userNumber = toOneBotNumber(userId)
@@ -69,14 +53,30 @@ export function apply(ctx: Context, config: Config) {
             logger.debug(`getStrangerInfo 失败 userId=${userId} ${errorMessage(err)}`)
         }
 
+        // 好友黑名单拦截：已拉黑的用户发来的申请一律自动拒绝
+        if (await getBlacklistedFriend(ctx, userId)) {
+            try {
+                await bot.internal.setFriendAddRequest(flag, false, '已被拉黑')
+            } catch (err) {
+                logger.warn('拒绝黑名单好友申请失败', err)
+            }
+            try {
+                await notifyAdmins(ctx, bot, config, escapeTpl(config.messages.friendBlacklistRejectNotification, buildVars({ userId, userName: nickname, comment })))
+            } catch (err) {
+                logger.warn('通知管理员（黑名单好友拒绝）失败', err)
+            }
+            logger.event('friend.auto-reject-blacklist', { userId })
+            return
+        }
+
         // 自动通过
         if (config.friend.autoApprove) {
             try {
                 await bot.internal.setFriendAddRequest(flag, true, '')
                 if (config.friend.notifyAdminOnApprove) {
-                    const msg = escapeTpl(config.friend.approveNotificationMessage, {
-                        userId, nickname, comment,
-                    })
+                    const msg = escapeTpl(config.messages.friendApproveNotificationMessage, buildVars({
+                        userId, userName: nickname, comment,
+                    }))
                     await notifyAdmins(ctx, bot, config, msg)
                 }
             } catch (err) {
@@ -91,9 +91,9 @@ export function apply(ctx: Context, config: Config) {
         })
 
         // 通知管理员
-        const msg = escapeTpl(config.friend.requestMessage, {
-            userId, nickname, comment,
-        })
+        const msg = escapeTpl(config.messages.friendRequestMessage, buildVars({
+            userId, userName: nickname, comment,
+        }))
         await notifyAdmins(ctx, bot, config, msg)
     })
 }

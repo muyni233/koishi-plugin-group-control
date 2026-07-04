@@ -1,6 +1,6 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, escapeTpl } from '../utils'
+import { notifyAdmins, escapeTpl, buildVars } from '../utils'
 import { parseGuildId } from '../utils-id'
 import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
@@ -79,6 +79,23 @@ export function apply(ctx: Context, config: Config) {
 
         const { platform } = session
 
+        // 获取邀请者与群信息（提前获取，黑名单拒绝通知也需要）
+        let userName = userId
+        try {
+            const userInfo = await bot.getUser(userId)
+            userName = userInfo?.name || userInfo?.nick || userId
+        } catch (err) {
+            logger.warn(`获取用户信息失败 userId=${userId}`, err)
+        }
+
+        let groupName = groupId
+        try {
+            const guildInfo = await bot.getGuild(groupId) as { name?: string; group_name?: string } | null
+            groupName = guildInfo?.name || guildInfo?.group_name || groupId
+        } catch (err) {
+            logger.warn(`获取群信息失败 groupId=${groupId}`, err)
+        }
+
         // 黑名单拦截：已被拉黑的群邀请一律自动拒绝
         if (config.basic.enableBlacklist) {
             const bl = await getBlacklistedGuild(ctx, groupId)
@@ -91,7 +108,7 @@ export function apply(ctx: Context, config: Config) {
                 }
 
                 // 通知管理员（告知已自动拒绝，以及如何放行）
-                const rejectNotify = `已自动拒绝黑名单群邀请\n群号：${groupId}\n邀请者 QQ：${userId}\n如需放行请先执行 gc.unban ${groupId} 再让对方重新邀请。`
+                const rejectNotify = escapeTpl(config.messages.inviteBlacklistRejectNotification, buildVars({ groupId, groupName, userId }))
                 try {
                     await notifyAdmins(ctx, bot, config, rejectNotify)
                 } catch (err) {
@@ -100,7 +117,7 @@ export function apply(ctx: Context, config: Config) {
 
                 // 通知邀请者
                 try {
-                    const rejectMsg = `您邀请加入的群 ${groupId} 已被机器人拉黑，邀请已被自动拒绝。如有疑问请联系机器人管理员。`
+                    const rejectMsg = escapeTpl(config.messages.inviteBlacklistRejectPrompt, buildVars({ groupId, groupName, userId }))
                     await bot.sendPrivateMessage(userId, rejectMsg)
                 } catch (err) {
                     logger.debug(`通知邀请者（黑名单拒绝）失败 userId=${userId} ${errorMessage(err)}`)
@@ -121,24 +138,6 @@ export function apply(ctx: Context, config: Config) {
             flag,
         }, 'debug')
 
-        // 获取邀请者信息
-        let userName = userId
-        try {
-            const userInfo = await bot.getUser(userId)
-            userName = userInfo?.name || userInfo?.nick || userId
-        } catch (err) {
-            logger.warn(`获取用户信息失败 userId=${userId}`, err)
-        }
-
-        // 获取群信息
-        let groupName = groupId
-        try {
-            const guildInfo = await bot.getGuild(groupId) as { name?: string; group_name?: string } | null
-            groupName = guildInfo?.name || guildInfo?.group_name || groupId
-        } catch (err) {
-            logger.warn(`获取群信息失败 groupId=${groupId}`, err)
-        }
-
         // 自动同意逻辑（无论是否配置管理员均可生效）
         if (config.invite.autoApprove) {
             try {
@@ -153,9 +152,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 通知邀请者已自动通过
             try {
-                const approveMessage = escapeTpl(config.invite.inviteApproveMessage, {
+                const approveMessage = escapeTpl(config.messages.inviteApprovePrompt, buildVars({
                     groupName, groupId, userName, userId,
-                })
+                }))
                 await bot.sendPrivateMessage(userId, approveMessage)
             } catch (err) {
                 logger.warn(`发送自动通过提示失败 userId=${userId}`, err)
@@ -163,9 +162,9 @@ export function apply(ctx: Context, config: Config) {
 
             // 通知管理员
             if (config.invite.notifyAdminOnApprove) {
-                const notifyMessage = escapeTpl(config.invite.inviteApproveNotificationMessage, {
+                const notifyMessage = escapeTpl(config.messages.inviteApproveNotificationMessage, buildVars({
                     groupName, groupId, userName, userId,
-                })
+                }))
                 await notifyAdmins(ctx, bot, config, notifyMessage)
             }
             return
@@ -175,9 +174,9 @@ export function apply(ctx: Context, config: Config) {
 
         // 发送等待审核提示给邀请者
         try {
-            const waitMessage = escapeTpl(config.invite.inviteWaitMessage, {
+            const waitMessage = escapeTpl(config.messages.inviteWaitPrompt, buildVars({
                 groupName, groupId, userName, userId,
-            })
+            }))
 
             await bot.sendPrivateMessage(userId, waitMessage)
         } catch (err) {
@@ -201,9 +200,9 @@ export function apply(ctx: Context, config: Config) {
             flag,
         })
 
-        const requestMessage = escapeTpl(config.invite.inviteRequestMessage, {
+        const requestMessage = escapeTpl(config.messages.inviteRequestMessage, buildVars({
             groupName, groupId, userName, userId,
-        })
+        }))
 
         await notifyAdmins(ctx, bot, config, requestMessage)
         logger.debug('已发送群邀请审核通知')
