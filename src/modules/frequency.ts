@@ -3,13 +3,14 @@ import { Config } from '../config'
 import { getCommandFrequencyRecord, updateCommandFrequencyRecord, CommandFrequencyRecord } from '../database'
 import { parseGuildId } from '../utils-id'
 import { createLogger, errorMessage } from '../logger'
-import { escapeTpl, isAdminCommand, buildVars } from '../utils'
+import { escapeTpl, isAdminCommand, buildVars, SimpleLRUCache } from '../utils'
 
 export const name = 'group-control-frequency'
 
 const SCOPE = 'group-control:frequency'
 const PRIVATE_GUILD_PREFIX = '__private__:'
 const frequencyLocks = new Map<string, Promise<void>>()
+const frequencyCache = new SimpleLRUCache<CommandFrequencyRecord>(1 * 60 * 60 * 1000, 5000)
 
 function isBlocked(record: CommandFrequencyRecord | null): boolean {
     if (!record || !record.blockExpiryTime) return false
@@ -60,26 +61,46 @@ async function handleTrigger(
     expWindow: number,
     notifyCooldown: number,
 ): Promise<TriggerResult> {
-    let record = await getCommandFrequencyRecord(ctx, platform, guildId)
+    const cacheKey = `${platform}:${guildId}`
+    let record = frequencyCache.get(cacheKey)
+    if (!record) {
+        const dbRecord = await getCommandFrequencyRecord(ctx, platform, guildId)
+        if (!dbRecord) {
+            record = makeEmptyRecord(platform, guildId, Math.floor(Date.now() / 1000))
+        } else {
+            record = dbRecord
+        }
+        frequencyCache.set(cacheKey, record)
+    }
+
     const now = Math.floor(Date.now() / 1000)
     const windowStart = now - window
+    let dbWriteNeeded = false
 
-    if (!record) {
-        record = makeEmptyRecord(platform, guildId, now)
-    } else if (record.lastCommandTime < windowStart) {
+    // Check if block has expired. If so, clear it.
+    if (record.blockExpiryTime > 0 && now >= record.blockExpiryTime) {
+        const blockResetExpired = (now - record.blockExpiryTime) > expWindow
+        record.blockExpiryTime = 0
+        if (blockResetExpired) {
+            record.blockCount = 0
+        }
+        dbWriteNeeded = true
+    }
+
+    if (record.lastCommandTime < windowStart) {
         if (isBlocked(record)) {
             // still blocked, don't reset
         } else {
-            const blockExpired = record.blockExpiryTime > 0 && (now - record.blockExpiryTime) > expWindow
             record.commandCount = 1
             record.lastCommandTime = now
             record.warningSent = false
             record.firstWarningTime = 0
-            if (blockExpired) record.blockCount = 0
         }
     } else {
-        record.commandCount += 1
-        record.lastCommandTime = now
+        if (!isBlocked(record)) {
+            record.commandCount += 1
+            record.lastCommandTime = now
+        }
     }
 
     // still blocked
@@ -88,10 +109,15 @@ async function handleTrigger(
         const lastNotify = record.lastBlockNotifyTime || 0
         if (now - lastNotify >= notifyCooldown) {
             record.lastBlockNotifyTime = now
-            await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            dbWriteNeeded = true
+            if (dbWriteNeeded) {
+                await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            }
             return { result: 'blocked', remaining }
         } else {
-            await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            if (dbWriteNeeded) {
+                await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            }
             return { result: 'blocked-silent' }
         }
     }
@@ -110,7 +136,9 @@ async function handleTrigger(
             record.commandCount = 1
             record.lastCommandTime = now
             record.firstWarningTime = now
-            await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            if (dbWriteNeeded) {
+                await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            }
             return { result: 'warn' }
         } else {
             record.blockCount = (record.blockCount || 0) + 1
@@ -120,12 +148,17 @@ async function handleTrigger(
             record.commandCount = 0
             record.firstWarningTime = 0
             record.lastBlockNotifyTime = now
-            await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            dbWriteNeeded = true
+            if (dbWriteNeeded) {
+                await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+            }
             return { result: 'new-blocked', dur }
         }
     }
 
-    await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+    if (dbWriteNeeded) {
+        await updateCommandFrequencyRecord(ctx, platform, guildId, record)
+    }
     return { result: 'ok' }
 }
 

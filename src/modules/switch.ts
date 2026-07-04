@@ -29,9 +29,19 @@ function stripLeadingBotMentions(content: string): string {
 function getMessageCommandName(ctx: Context, session: Session): string | null {
     const stripped = (session as Session & { stripped?: { content?: string } }).stripped
     const strippedContent = stripped?.content?.trim()
-    const content = stripLeadingBotMentions(strippedContent ? stripped!.content! : session.content ?? '')
-    const firstWord = content.match(/^\s*(\S+)/)?.[1]
-    return firstWord ? normalizeCommandName(firstWord, getCommandPrefixes(ctx, session)) : null
+    const content = strippedContent ? stripped!.content! : session.content ?? ''
+
+    const prefixes = getCommandPrefixes(ctx, session)
+    const hasPrefix = prefixes.some(p => p && content.startsWith(p))
+    const isMentioned = session.elements?.some(e => e.type === 'at' && e.attrs?.id === session.bot?.userId)
+
+    if (!hasPrefix && !isMentioned) {
+        return null
+    }
+
+    const cleanContent = stripLeadingBotMentions(content.trim())
+    const firstWord = cleanContent.match(/^\s*(\S+)/)?.[1]
+    return firstWord ? normalizeCommandName(firstWord, prefixes) : null
 }
 
 export function apply(ctx: Context, config: Config) {

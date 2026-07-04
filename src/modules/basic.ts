@@ -286,6 +286,7 @@ export function apply(ctx: Context, config: Config) {
         const N = list.length
         if (!exclude) return { decision: N <= threshold ? 'quit' : 'keep', count: N, groupName }
         if (N <= threshold) return { decision: 'quit', count: N, groupName }
+        if (N > threshold + maxBots) return { decision: 'keep', count: N, groupName }
 
         // 统计机器人：当 bots ≥ N - threshold 时，真人数必 ≤ 阈值，可提前结束
         const selfId = getBotSelfId(bot)

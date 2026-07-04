@@ -37,7 +37,10 @@ export function apply(ctx: Context, config: Config) {
         const expireMs = config.invite.inviteExpireDays * 24 * 60 * 60 * 1000
         try {
             for (const bot of ctx.bots) {
-                if (bot.platform) await clearExpiredPendingInvites(ctx, bot.platform, expireMs)
+                const selfId = getBotSelfId(bot)
+                if (selfId && bot.platform) {
+                    await clearExpiredPendingInvites(ctx, bot.platform, selfId, expireMs)
+                }
             }
             logger.debug('已执行过期邀请清理')
         } catch (err) {
@@ -79,23 +82,6 @@ export function apply(ctx: Context, config: Config) {
 
         const { platform } = session
 
-        // 获取邀请者与群信息（提前获取，黑名单拒绝通知也需要）
-        let userName = userId
-        try {
-            const userInfo = await bot.getUser(userId)
-            userName = userInfo?.name || userInfo?.nick || userId
-        } catch (err) {
-            logger.warn(`获取用户信息失败 userId=${userId}`, err)
-        }
-
-        let groupName = groupId
-        try {
-            const guildInfo = await bot.getGuild(groupId) as { name?: string; group_name?: string } | null
-            groupName = guildInfo?.name || guildInfo?.group_name || groupId
-        } catch (err) {
-            logger.warn(`获取群信息失败 groupId=${groupId}`, err)
-        }
-
         // 黑名单拦截：已被拉黑的群邀请一律自动拒绝
         if (config.basic.enableBlacklist) {
             const bl = await getBlacklistedGuild(ctx, groupId)
@@ -105,6 +91,15 @@ export function apply(ctx: Context, config: Config) {
                     await handleInviteRequest(bot, flag, false, '该群已被机器人拉黑')
                 } catch (err) {
                     logger.warn('拒绝黑名单群邀请失败 (flag 可能已失效)', err)
+                }
+
+                // 通知管理员时，如果能拿到群名就拿群名，否则用 ID 兜底
+                let groupName = groupId
+                try {
+                    const guildInfo = await bot.getGuild(groupId) as { name?: string; group_name?: string } | null
+                    groupName = guildInfo?.name || guildInfo?.group_name || groupId
+                } catch (err) {
+                    logger.debug(`获取黑名单群信息失败 groupId=${groupId} ${errorMessage(err)}`)
                 }
 
                 // 通知管理员（告知已自动拒绝，以及如何放行）
@@ -126,6 +121,23 @@ export function apply(ctx: Context, config: Config) {
                 logger.event('invite.auto-reject-blacklist', { groupId, userId })
                 return
             }
+        }
+
+        // 获取邀请者与群信息（普通流程，未被拉黑时才进行 API 请求）
+        let userName = userId
+        try {
+            const userInfo = await bot.getUser(userId)
+            userName = userInfo?.name || userInfo?.nick || userId
+        } catch (err) {
+            logger.warn(`获取用户信息失败 userId=${userId}`, err)
+        }
+
+        let groupName = groupId
+        try {
+            const guildInfo = await bot.getGuild(groupId) as { name?: string; group_name?: string } | null
+            groupName = guildInfo?.name || guildInfo?.group_name || groupId
+        } catch (err) {
+            logger.warn(`获取群信息失败 groupId=${groupId}`, err)
         }
 
         if (!flag) {

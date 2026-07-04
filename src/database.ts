@@ -288,28 +288,24 @@ async function clearScopedRows(
     const normalizedId = normalizeId(guildId);
     if (selfId) {
         const selfKey = normalizeId(selfId);
-        // scoped
-        await ctx.database.remove(table, { platform, [field]: scopedId(guildId, selfKey) } as any);
-        // legacy unscoped
-        await ctx.database.remove(table, { platform, [field]: normalizedId } as any);
-        // prefixed-legacy：仅删非 scoped 的脏数据（scoped 行已是当前格式，不动）
-        const dirty = await getRowsByNormalizedId(ctx, table, field as never, platform, guildId);
-        for (const row of dirty) {
-            const stored = String((row as Record<string, unknown>)[field] ?? '');
-            if (!isScopedId(stored)) {
-                await ctx.database.remove(table, { platform, [field]: stored } as any);
-            }
-        }
+        const targets = [
+            scopedId(guildId, selfKey),
+            normalizedId,
+            `${platform}:${scopedId(guildId, selfKey)}`,
+            `${platform}:${normalizedId}`,
+        ];
+        await ctx.database.remove(table, { platform, [field]: { $in: targets } } as any);
         return;
     }
-    // 无 selfId：全表扫描按归一化 id 比对删除
-    const rows = await ctx.database.get(table, { platform } as any);
-    for (const row of rows) {
-        const stored = String((row as Record<string, unknown>)[field] ?? '');
-        if (unscopedId(stored) === normalizedId) {
-            await ctx.database.remove(table, { platform, [field]: stored } as any);
-        }
+    // 无 selfId：通过 ctx.bots 拼装出当前所有活跃的 selfId 进行删除，避免全表扫描 + N+1 逐行删除
+    const selfIds = ctx.bots.map(b => parseGuildId(b.selfId ?? b.userId)).filter(Boolean) as string[];
+    const targets = [normalizedId, `${platform}:${normalizedId}`];
+    for (const sId of selfIds) {
+        const selfKey = normalizeId(sId);
+        targets.push(scopedId(guildId, selfKey));
+        targets.push(`${platform}:${scopedId(guildId, selfKey)}`);
     }
+    await ctx.database.remove(table, { platform, [field]: { $in: targets } } as any);
 }
 
 export async function getBlacklistedGuild(ctx: Context, guildId: string) {
@@ -321,11 +317,9 @@ export async function getBlacklistedGuild(ctx: Context, guildId: string) {
 export async function removeBlacklistedGuild(ctx: Context, guildId: string) {
     guildId = normalizeId(guildId);
     const rows = await getRowsByNormalizedId(ctx, 'blacklisted_guild', 'guildId', BLACKLIST_PLATFORM, guildId);
-    await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId });
-    for (const row of rows) {
-        if (row.guildId !== guildId) {
-            await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId: row.guildId });
-        }
+    if (rows.length > 0) {
+        const ids = rows.map(r => r.guildId);
+        await ctx.database.remove('blacklisted_guild', { platform: BLACKLIST_PLATFORM, guildId: { $in: ids } });
     }
     return rows.length > 0;
 }
@@ -370,11 +364,9 @@ export async function createBlacklistedFriend(ctx: Context, userId: string, reas
 export async function removeBlacklistedFriend(ctx: Context, userId: string) {
     userId = normalizeId(userId);
     const rows = await getRowsByNormalizedId(ctx, 'blacklisted_friend', 'userId', BLACKLIST_PLATFORM, userId);
-    await ctx.database.remove('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId });
-    for (const row of rows) {
-        if (row.userId !== userId) {
-            await ctx.database.remove('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId: row.userId });
-        }
+    if (rows.length > 0) {
+        const ids = rows.map(r => r.userId);
+        await ctx.database.remove('blacklisted_friend', { platform: BLACKLIST_PLATFORM, userId: { $in: ids } });
     }
     return rows.length > 0;
 }
@@ -554,10 +546,10 @@ export async function getAllPendingInvites(ctx: Context, platform: string, selfI
         .map(decodePendingInvite);
 }
 
-export async function clearExpiredPendingInvites(ctx: Context, platform: string, expireTimeMs: number) {
+export async function clearExpiredPendingInvites(ctx: Context, platform: string, selfId: string, expireTimeMs: number) {
+    selfId = normalizeId(selfId);
     const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
-    // 单次条件批量删除，避免全表拉取 + 逐行删除（N+1）
-    await ctx.database.remove('pending_invite', { platform, time: { $lt: cutoff } });
+    await ctx.database.remove('pending_invite', { platform, selfId, time: { $lt: cutoff } });
 }
 
 // 待处理好友申请管理
@@ -591,7 +583,7 @@ export async function getAllPendingFriendRequests(ctx: Context, platform: string
 }
 
 export async function clearExpiredPendingFriendRequests(ctx: Context, platform: string, selfId: string, expireTimeMs: number) {
+    selfId = normalizeId(selfId);
     const cutoff = Math.floor((Date.now() - expireTimeMs) / 1000);
-    // 单次条件批量删除，避免全表拉取 + 逐行删除（N+1）
-    await ctx.database.remove('pending_friend_request', { platform, time: { $lt: cutoff } });
+    await ctx.database.remove('pending_friend_request', { platform, selfId, time: { $lt: cutoff } });
 }
