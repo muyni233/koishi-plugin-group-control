@@ -41,7 +41,7 @@ export function escapeTpl(template: string, fields: Record<string, string | numb
  *
  * 命名约定：
  *   - `{userId}`：相关用户的 QQ 号（操作者 / 邀请者 / 申请者 / 指令发起者统一用此名）
- *   - `{userName}` / `{nickname}`：相关用户的展示名，两者同值，模板里用哪个都行
+ *   - `{userName}`：相关用户的展示名（操作者 / 邀请者 / 申请者 / 指令发起者等）
  *   - `{groupId}` / `{groupName}`：群号 / 群名
  *   - `{comment}`：好友申请附言
  *   - `{memberCount}` / `{threshold}`：小群人数 / 阈值
@@ -62,7 +62,6 @@ export interface MessageVars {
 
 /**
  * 把分散的上下文变量整理成模板可用的 fields 对象。
- * - `{userName}` 与 `{nickname}` 同值（都填 name），模板里两个变量名都能用。
  * - 未传入的字段填空串，确保模板里写了未获取的变量也不会残留 `{key}` 字面量。
  */
 export function buildVars(opts: MessageVars): Record<string, string | number> {
@@ -72,7 +71,6 @@ export function buildVars(opts: MessageVars): Record<string, string | number> {
         groupName: opts.groupName ?? '',
         userId: opts.userId ?? '',
         userName: name,
-        nickname: name,
         comment: opts.comment ?? '',
         memberCount: opts.memberCount ?? '',
         threshold: opts.threshold ?? '',
@@ -260,7 +258,7 @@ export function clearGuildAdminCache(): void {
 /** 判定成员是否为群管理员/群主。兼容两种真实形态：
  *   - 原始 OneBot 成员：role 为 'owner'/'admin'/'member'
  *   - koishi GuildMember：roles 为 [{ id: 'owner'|'admin' }]（decodeGuildMember 产出） */
-function hasAdminRole(member: OneBotMember | null | undefined): boolean {
+export function hasAdminRole(member: OneBotMember | null | undefined): boolean {
     if (!member) return false
     if (member.role === 'owner' || member.role === 'admin') return true
     if (Array.isArray(member.roles)) {

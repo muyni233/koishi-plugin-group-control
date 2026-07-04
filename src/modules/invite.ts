@@ -1,12 +1,12 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, escapeTpl, buildVars } from '../utils'
+import { notifyAdmins, escapeTpl, buildVars, hasAdminRole } from '../utils'
 import { parseGuildId } from '../utils-id'
-import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent } from '../types'
+import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent, OneBotMember } from '../types'
 import { createLogger, errorMessage } from '../logger'
 import {
     addPendingInvite, clearExpiredPendingInvites,
-    getBlacklistedGuild, markApprovedGuild,
+    getBlacklistedGuild, markApprovedGuild, clearApprovedGuild,
 } from '../database'
 
 export const name = 'group-control-invite'
@@ -150,15 +150,44 @@ export function apply(ctx: Context, config: Config) {
             flag,
         }, 'debug')
 
-        // 自动同意逻辑（无论是否配置管理员均可生效）
-        if (config.invite.autoApprove) {
+        // 自动同意逻辑（如果邀请者是管理员，或者开启了 autoApprove 自动同意）
+        const primaryAdmins = config.admin.primaryAdmins ?? []
+        const deputyAdmins = config.admin.deputyAdmins ?? []
+        let isAdminInviter = primaryAdmins.includes(userId!)
+            || primaryAdmins.includes(rawUserId!)
+            || deputyAdmins.includes(userId!)
+            || deputyAdmins.includes(rawUserId!)
+
+        // 如果并非直属管理员，但该成员是通知群（大群）的管理员/群主，同样视为管理员邀请并自动豁免
+        if (!isAdminInviter && config.admin.notificationGroupId) {
+            const notificationGroupId = config.admin.notificationGroupId
             try {
-                await handleInviteRequest(bot, flag, true)
-                // 记录已审核通过（持久化，永久豁免小群检测，退群时清除）
+                const member = await bot.getGuildMember(notificationGroupId, userId!)
+                if (hasAdminRole(member as any)) {
+                    isAdminInviter = true
+                }
+            } catch {
+                try {
+                    const info = await bot.internal.getGroupMemberInfo(notificationGroupId, userId!)
+                    if (hasAdminRole(info)) {
+                        isAdminInviter = true
+                    }
+                } catch {
+                    // 忽略
+                }
+            }
+        }
+
+        if (isAdminInviter || config.invite.autoApprove) {
+            try {
+                // 先写入白名单表，再同意邀请，避免 API 异步回调 guild-added 并发处理导致的时序 race condition
                 await markApprovedGuild(ctx, groupId, selfId)
-                logger.event('invite.auto-approve', { groupId, userId })
+                await handleInviteRequest(bot, flag, true)
+                logger.event(isAdminInviter ? 'invite.admin-approve' : 'invite.auto-approve', { groupId, userId })
             } catch (err) {
-                logger.error('自动同意群聊邀请失败', err)
+                // 如果同意失败，清理刚才写入的临时记录
+                await clearApprovedGuild(ctx, groupId, selfId)
+                logger.error(isAdminInviter ? '管理员邀请自动同意失败' : '自动同意群聊邀请失败', err)
                 return
             }
 
@@ -173,10 +202,13 @@ export function apply(ctx: Context, config: Config) {
             }
 
             // 通知管理员
-            if (config.invite.notifyAdminOnApprove) {
-                const notifyMessage = escapeTpl(config.messages.inviteApproveNotificationMessage, buildVars({
-                    groupName, groupId, userName, userId,
-                }))
+            if (isAdminInviter || config.invite.notifyAdminOnApprove) {
+                const notifyMessage = escapeTpl(
+                    isAdminInviter
+                        ? config.messages.inviteAdminApproveNotificationMessage
+                        : config.messages.inviteApproveNotificationMessage,
+                    buildVars({ groupName, groupId, userName, userId })
+                )
                 await notifyAdmins(ctx, bot, config, notifyMessage)
             }
             return

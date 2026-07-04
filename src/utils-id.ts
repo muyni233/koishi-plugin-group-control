@@ -4,9 +4,10 @@
  */
 
 /** 从形如 `onebot:12345` 或 `12345` 的字符串里取出纯数字 ID。无效输入返回 null。 */
-export function parseGuildId(input: string | undefined | null): string | null {
-    if (!input) return null
-    const match = input.trim().match(/^(?:[^:]+:)?(\d+)$/)
+export function parseGuildId(input: string | number | undefined | null): string | null {
+    if (input == null) return null
+    const str = String(input).trim()
+    const match = str.match(/^(?:[^:]+:)?(\d+)$/)
     return match ? match[1] : null
 }
 

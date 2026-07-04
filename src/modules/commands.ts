@@ -265,7 +265,7 @@ export function apply(ctx: Context, config: Config) {
                 friends.forEach((fr, i) => {
                     const comment = fr.comment || '无'
                     lines.push(escapeTpl(
-                        `${i + 1}. {nickname}（${fr.userId}）· 附言：{comment}`,
+                        `${i + 1}. {userName}（${fr.userId}）· 附言：{comment}`,
                         buildVars({ userName: fr.nickname, comment }),
                     ))
                 })

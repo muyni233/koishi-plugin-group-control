@@ -3,12 +3,12 @@ import { parseGuildId } from './utils-id'
 
 /**
  * 声明非标准事件，使 ctx.on(...) 无需 as any：
- *   - guild-member-mute：由 koishi-plugin-adapter-onebot 在 bot 被禁言时派发。
+ *   - guild-member/ban：由 koishi-plugin-adapter-onebot 在 bot 被禁言时派发。
  *   - help/command：由 koishi help 插件在渲染指令详情时派发，参数为 (output, command, session)。
  */
 declare module '@satorijs/core' {
     interface Events {
-        'guild-member-mute'(session: Session): void
+        'guild-member/ban'(session: Session): void
         'help/command'(output: string[], command: Command, session: Session): void
     }
 }

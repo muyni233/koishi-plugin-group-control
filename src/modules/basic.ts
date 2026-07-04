@@ -581,61 +581,61 @@ export function apply(ctx: Context, config: Config) {
     })
 
     // 被禁言通知 / 被长时间禁言自动退群拉黑
-    if (config.basic.notifyAdminOnMute || config.basic.muteAutoQuit) {
-        ctx.on('guild-member-mute', async (session: Session) => {
-            // 只关心 bot 自己被禁言
-            const bot = asOneBotBot(session.bot)
-            const selfId = getBotSelfId(bot) ?? ''
-            if (parseGuildId(session.userId) !== selfId) return
-            // duration 为 0 表示解除禁言，不处理
-            const sessionExt = session as Session & { duration?: number; operatorId?: string }
-            if (!sessionExt.duration) return
+    ctx.on('guild-member/ban', async (session: Session) => {
+        if (!config.basic.notifyAdminOnMute && !config.basic.muteAutoQuit) return
 
-            const { platform } = session
-            const guildId = parseGuildId(session.guildId)
-            if (!guildId) return
-            const userId = sessionExt.operatorId || ''
-            const duration = sessionExt.duration ?? 0
-            const groupName = await getGroupName(bot, guildId, logger)
-            const userName = await getUserName(bot, userId, guildId, logger)
+        // 只关心 bot 自己被禁言
+        const bot = asOneBotBot(session.bot)
+        const selfId = getBotSelfId(bot) ?? ''
+        if (parseGuildId(session.userId) !== selfId) return
+        // duration 为 0表示解除禁言，不处理
+        const sessionExt = session as Session & { duration?: number; operatorId?: string }
+        if (!sessionExt.duration) return
 
-            // 被禁言时长达到阈值：自动退群并拉黑（优先于普通通知）
-            if (config.basic.muteAutoQuit && duration >= config.basic.muteAutoQuitThreshold) {
-                const quitMsg = escapeTpl(config.messages.muteQuitNotificationMessage, buildVars({
-                    groupId: guildId, groupName, userId, userName, duration,
-                }))
-                await notifyAdmins(ctx, bot, config, quitMsg)
+        const { platform } = session
+        const guildId = parseGuildId(session.guildId)
+        if (!guildId) return
+        const userId = sessionExt.operatorId || ''
+        const duration = sessionExt.duration ?? 0
+        const groupName = await getGroupName(bot, guildId, logger)
+        const userName = await getUserName(bot, userId, guildId, logger)
 
-                // 拉入黑名单（reason='muted'，避免被 guild-removed 当作被踢重复处理）
-                try {
-                    await createBlacklistedGuild(ctx, guildId, 'muted')
-                } catch (err) {
-                    logger.warn(`写入禁言黑名单失败 guildId=${guildId}`, err)
-                }
+        // 被禁言时长达到阈值：自动退群并拉黑（优先于普通通知）
+        if (config.basic.muteAutoQuit && duration >= config.basic.muteAutoQuitThreshold) {
+            const quitMsg = escapeTpl(config.messages.muteQuitNotificationMessage, buildVars({
+                groupId: guildId, groupName, userId, userName, duration,
+            }))
+            await notifyAdmins(ctx, bot, config, quitMsg)
 
-                // 标记主动退群并退出（被禁言状态下无法发群消息，故不再尝试群内提示）
-                const dedupKey = makeGuildKey(platform, selfId, guildId)
-                quittingGuilds.set(dedupKey, Date.now())
-                await markSelfLeft(ctx, guildId, selfId)
-                try {
-                    await leaveGroup(bot, guildId)
-                } catch (err) {
-                    logger.error(`被禁言自动退群失败 guildId=${guildId}`, err)
-                    quittingGuilds.delete(dedupKey)
-                    await clearSelfLeft(ctx, guildId, selfId)
-                }
-                return
+            // 拉入黑名单（reason='muted'，避免被 guild-removed 当作被踢重复处理）
+            try {
+                await createBlacklistedGuild(ctx, guildId, 'muted')
+            } catch (err) {
+                logger.warn(`写入禁言黑名单失败 guildId=${guildId}`, err)
             }
 
-            // 普通被禁言通知
-            if (config.basic.notifyAdminOnMute) {
-                const msg = escapeTpl(config.messages.muteNotificationMessage, buildVars({
-                    groupId: guildId, groupName, userId, userName, duration,
-                }))
-                await notifyAdmins(ctx, bot, config, msg)
+            // 标记主动退群并退出（被禁言状态下无法发群消息，故不再尝试群内提示）
+            const dedupKey = makeGuildKey(platform, selfId, guildId)
+            quittingGuilds.set(dedupKey, Date.now())
+            await markSelfLeft(ctx, guildId, selfId)
+            try {
+                await leaveGroup(bot, guildId)
+            } catch (err) {
+                logger.error(`被禁言自动退群失败 guildId=${guildId}`, err)
+                quittingGuilds.delete(dedupKey)
+                await clearSelfLeft(ctx, guildId, selfId)
             }
-        })
-    }
+            return
+        }
+
+        // 普通被禁言通知
+        if (config.basic.notifyAdminOnMute) {
+            const msg = escapeTpl(config.messages.muteNotificationMessage, buildVars({
+                groupId: guildId, groupName, userId, userName, duration,
+            }))
+            await notifyAdmins(ctx, bot, config, msg)
+        }
+    })
 
     if (config.basic.quitCommandEnabled) {
         const cmdOpts = getAdminCommandOptions(config)

@@ -105,6 +105,7 @@ export interface MessagesConfig {
     // —— 群聊邀请审核 ——
     inviteRequestMessage: string
     inviteApproveNotificationMessage: string
+    inviteAdminApproveNotificationMessage: string
     inviteWaitPrompt: string
     inviteApprovePrompt: string
     inviteRejectPrompt: string
@@ -224,37 +225,41 @@ export const Config: Schema<Config> = Schema.intersect([
         }).description('日志与调试'),
     }),
     Schema.object({
-        messages: Schema.object({
-            // —— 欢迎 / 退群 / 黑名单提示（群内广播）——
-            welcomeMessage: Schema.string().role('textarea').default('大家好，我是本群的机器人，请多关照~').description('加入群聊时发送的欢迎消息'),
-            quitMessage: Schema.string().role('textarea').default('收到 {userId} 的指令，机器人即将退出本群。').description('quit 指令触发后的群内提示'),
-            blacklistMessage: Schema.string().role('textarea').default('本群已被拉黑，机器人将自动退出。如有疑问，请联系管理员。').description('被拉入黑名单群后的群内提示'),
-            smallGroupQuitMessage: Schema.string().role('textarea').default('本群人数不足（当前{memberCount}人，需≥{threshold}人），机器人即将退出本群，如有需求请联系管理员。').description('小群自动退群时的群内提示'),
-            // —— 给管理员的告警通知 ——
-            kickNotificationMessage: Schema.string().role('textarea').default('我被踢出了群聊\n群名称：{groupName}\n群号：{groupId}\n已自动加入黑名单。').description('机器人被踢后给管理员的通知'),
-            smallGroupQuitNotificationMessage: Schema.string().role('textarea').default('我退出了一个小群\n群名称：{groupName}\n群号：{groupId}\n群成员数：{memberCount}人（阈值：{threshold}人）').description('小群自动退群时给管理员的通知'),
-            smallGroupQualifiedMessage: Schema.string().role('textarea').default('我被拉进了一个群聊，但未经审核\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）\n人数已达标，请确认是否保留。').description('合格小群给管理员的通知'),
-            muteNotificationMessage: Schema.string().role('textarea').default('我被禁言了\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）\n禁言时长：{duration}秒').description('机器人被禁言后给管理员的通知'),
-            muteQuitNotificationMessage: Schema.string().role('textarea').default('我被长时间禁言，已自动退群并拉黑\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）\n禁言时长：{duration}秒').description('被禁言自动退群时给管理员的通知'),
-            quitCommandNotificationMessage: Schema.string().role('textarea').default('收到退群指令\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）').description('quit 指令触发时给管理员的通知'),
-            // —— 群聊邀请审核 ——
-            inviteRequestMessage: Schema.string().role('textarea').default('收到一条新的群聊邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName}（QQ：{userId}）\n\n同意请发送 gc.approve {groupId}，拒绝请发送 gc.reject {groupId}；也可以直接引用本条消息发送指令。').description('收到群邀请时给管理员的请求通知'),
-            inviteApproveNotificationMessage: Schema.string().role('textarea').default('已自动通过一条群聊邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName}（QQ：{userId}）').description('自动同意群邀请后给管理员的通知'),
-            inviteWaitPrompt: Schema.string().role('textarea').default('已收到您的群聊邀请，管理员正在审核中，请耐心等待~').description('人工审核时发给邀请者的等待提示'),
-            inviteApprovePrompt: Schema.string().role('textarea').default('您的群聊邀请已通过审核，机器人正在加入群聊。').description('群邀请通过后发给邀请者的提示'),
-            inviteRejectPrompt: Schema.string().role('textarea').default('很抱歉，您的群聊邀请未通过审核，机器人将不会加入该群聊。').description('群邀请被拒后发给邀请者的提示'),
-            inviteBlacklistRejectPrompt: Schema.string().role('textarea').default('很抱歉，您邀请的群 {groupId} 已被机器人拉黑，邀请已被自动拒绝。如有疑问，请联系机器人管理员。').description('群邀请命中黑名单时发给邀请者的提示'),
-            inviteBlacklistRejectNotification: Schema.string().role('textarea').default('已自动拒绝一条黑名单群邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者QQ：{userId}\n如需放行，请先发送 gc.unban {groupId}，再让对方重新邀请。').description('黑名单群邀请自动拒绝后给管理员的通知'),
-            // —— 好友申请管理 ——
-            friendRequestMessage: Schema.string().role('textarea').default('收到一条新的好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}\n\n同意请发送 gc.approve {userId}，拒绝请发送 gc.reject {userId}；也可以直接引用本条消息发送指令。').description('收到好友申请时给管理员的通知'),
-            friendApproveNotificationMessage: Schema.string().role('textarea').default('已自动通过一条好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}').description('自动通过好友申请后给管理员的通知'),
-            friendBlacklistRejectNotification: Schema.string().role('textarea').default('已自动拒绝一条黑名单好友申请\nQQ：{userId}\n昵称：{nickname}\n附言：{comment}').description('黑名单好友申请自动拒绝后给管理员的通知'),
-            // —— 频率控制 ——
-            frequencyWarnMessage: Schema.string().default('发言有点快哦，慢一点吧~').description('频率首次超限时的警告消息'),
-            frequencyBlockMessage: Schema.string().default('发言频率过高，已限制发言 {duration} 秒。').description('进入屏蔽时的通知'),
-            frequencyBlockedMessage: Schema.string().default('发言限制还没解除，再等 {time} 秒吧~').description('屏蔽期间再次触发时的提示'),
-            // —— Bot 开关 ——
-            botDisabledMessage: Schema.string().role('textarea').default('机器人正在休眠，请发送 bot-on 唤醒我~').description('bot 关闭状态下被 @ 或触发受保护指令时的提示'),
-        }).description('文案自定义'),
+        messages: Schema.intersect([
+            Schema.object({
+                // —— 群内广播与用户交互提示（群内公开）——
+                welcomeMessage: Schema.string().role('textarea').default('大家好，我是本群的机器人，请多关照~').description('加入群聊时发送的欢迎消息'),
+                quitMessage: Schema.string().role('textarea').default('收到 {userId} 的指令，机器人即将退出本群。').description('quit 指令触发后的群内提示'),
+                blacklistMessage: Schema.string().role('textarea').default('本群已被拉黑，机器人将自动退出。如有疑问，请联系管理员。').description('被拉入黑名单群后的群内提示'),
+                smallGroupQuitMessage: Schema.string().role('textarea').default('本群人数不足（当前{memberCount}人，需≥{threshold}人），机器人即将退出本群，如有需求请联系管理员。').description('小群自动退群时的群内提示'),
+                frequencyWarnMessage: Schema.string().default('发言有点快哦，慢一点吧~').description('频率首次超限时的警告消息'),
+                frequencyBlockMessage: Schema.string().default('发言频率过高，已限制发言 {duration} 秒。').description('进入屏蔽时的通知'),
+                frequencyBlockedMessage: Schema.string().default('发言限制还没解除，再等 {time} 秒吧~').description('屏蔽期间再次触发时的提示'),
+                botDisabledMessage: Schema.string().role('textarea').default('机器人正在休眠，请发送 bot-on 唤醒我~').description('bot 关闭状态下被 @ 或触发受保护指令时的提示'),
+            }).description('群聊公开广播与交互提示'),
+            Schema.object({
+                // —— 私聊邀请人反馈提示 ——
+                inviteWaitPrompt: Schema.string().role('textarea').default('已收到您的群聊邀请，管理员正在审核中，请耐心等待~').description('人工审核时发给邀请者的等待提示'),
+                inviteApprovePrompt: Schema.string().role('textarea').default('您的群聊邀请已通过审核，机器人正在加入群聊。').description('群邀请通过后发给邀请者的提示'),
+                inviteRejectPrompt: Schema.string().role('textarea').default('很抱歉，您的群聊邀请未通过审核，机器人将不会加入该群聊。').description('群邀请被拒后发给邀请者的提示'),
+                inviteBlacklistRejectPrompt: Schema.string().role('textarea').default('很抱歉，您邀请的群已被机器人拉黑，邀请已被自动拒绝。如有疑问，请联系机器人管理员。').description('群邀请命中黑名单时发给邀请者的提示'),
+            }).description('私聊邀请人反馈提示'),
+            Schema.object({
+                // —— 给管理员的告警与审核通知 ——
+                kickNotificationMessage: Schema.string().role('textarea').default('我被踢出了群聊\n群名称：{groupName}\n群号：{groupId}\n已自动加入黑名单。').description('机器人被踢后给管理员的通知'),
+                smallGroupQuitNotificationMessage: Schema.string().role('textarea').default('我退出了一个小群\n群名称：{groupName}\n群号：{groupId}\n群成员数：{memberCount}人（阈值：{threshold}人）').description('小群自动退群时给管理员的通知'),
+                smallGroupQualifiedMessage: Schema.string().role('textarea').default('我被拉进了一个群聊，但未经审核\n群名称：{groupName}\n群号：{groupId}\n当前人数：{memberCount}人（阈值：{threshold}人）').description('合格群聊给管理员的通知'),
+                muteNotificationMessage: Schema.string().role('textarea').default('我被禁言了\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）\n禁言时长：{duration}秒').description('机器人被禁言后给管理员的通知'),
+                muteQuitNotificationMessage: Schema.string().role('textarea').default('我被长时间禁言，已自动退群并拉黑\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）\n禁言时长：{duration}秒').description('被禁言自动退群时给管理员的通知'),
+                quitCommandNotificationMessage: Schema.string().role('textarea').default('收到退群指令\n群名称：{groupName}\n群号：{groupId}\n操作者：{userName}（QQ：{userId}）').description('quit 指令触发时给管理员的通知'),
+                inviteRequestMessage: Schema.string().role('textarea').default('收到一条新的群聊邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName}（QQ：{userId}）\n\n同意请发送 gc.approve {groupId}，拒绝请发送 gc.reject {groupId}；也可以直接引用本条消息发送指令。').description('收到群邀请时给管理员的请求通知'),
+                inviteApproveNotificationMessage: Schema.string().role('textarea').default('已自动通过一条群聊邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName}（QQ：{userId}）').description('自动同意群邀请后给管理员的通知'),
+                inviteAdminApproveNotificationMessage: Schema.string().role('textarea').default('收到管理员的群聊邀请，已自动通过\n群名称：{groupName}\n群号：{groupId}\n邀请者：{userName}（QQ：{userId}）').description('管理员邀请自动同意后给管理员的通知'),
+                inviteBlacklistRejectNotification: Schema.string().role('textarea').default('已自动拒绝一条黑名单群邀请\n群名称：{groupName}\n群号：{groupId}\n邀请者QQ：{userId}\n如需放行，请先发送 gc.unban {groupId}，再让对方重新邀请。').description('黑名单群邀请自动拒绝后给管理员的通知'),
+                friendRequestMessage: Schema.string().role('textarea').default('收到一条新的好友申请\n申请者：{userName}（QQ：{userId}）\n附言：{comment}\n\n同意请发送 gc.approve {userId}，拒绝请发送 gc.reject {userId}；也可以直接引用本条消息发送指令。').description('收到好友申请时给管理员的通知'),
+                friendApproveNotificationMessage: Schema.string().role('textarea').default('已自动通过一条好友申请\n申请者：{userName}（QQ：{userId}）\n附言：{comment}').description('自动通过好友申请后给管理员的通知'),
+                friendBlacklistRejectNotification: Schema.string().role('textarea').default('已自动拒绝一条黑名单好友申请\n申请者：{userName}（QQ：{userId}）\n附言：{comment}').description('黑名单好友申请自动拒绝后给管理员的通知'),
+            }).description('管理员审核与告警通知'),
+        ]).description('文案自定义'),
     }),
 ]) as Schema<Config>
