@@ -222,7 +222,7 @@ export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         logging: Schema.object({
             verbose: Schema.boolean().default(false).description('调试模式：开启后输出 debug 级别日志，并启用 gc.debug 接口测试指令'),
-            smallGroupRobotUinRangeMode: Schema.boolean().default(false).description('调试用：小群检测改用 get_robot_uin_range 号段区间判定官方机器人（适配器 is_robot 字段失效时启用，调用失败回退 is_robot）'),
+            smallGroupRobotUinRangeMode: Schema.boolean().default(false).description('调试用：小群检测改用 get_robot_uin_range 号段区间判定官方机器人（适配器 is_robot 字段失效时启用）'),
         }).description('日志与调试'),
     }),
     Schema.object({

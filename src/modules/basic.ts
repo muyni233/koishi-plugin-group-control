@@ -145,7 +145,7 @@ export function apply(ctx: Context, config: Config) {
     // 仅 smallGroupRobotUinRangeMode 开启时使用
     const robotUinRangeCache = new Map<string, { min: number; max: number }[] | null>()
 
-    /** 获取官方机器人号段区间。返回 null 表示接口不可用/调用失败（调用方应回退 is_robot）。
+    /** 获取官方机器人号段区间。返回 null 表示接口不可用/调用失败。
      *  null 会被缓存以避免反复调用不可用的接口。
      *
      *  get_robot_uin_range 是非标准接口，adapter-onebot 没有为它生成封装方法，
@@ -159,9 +159,9 @@ export function apply(ctx: Context, config: Config) {
             const internal = bot.internal as OneBotInternalRaw
             const raw = await internal._get('get_robot_uin_range')
             ranges = parseRobotUinRanges(raw)
-            if (!ranges) logger.debug('get_robot_uin_range 返回无法解析的号段数据，回退 is_robot')
+            if (!ranges) logger.debug('get_robot_uin_range 返回无法解析的号段数据')
         } catch (err) {
-            logger.debug(`get_robot_uin_range 调用失败，回退 is_robot ${errorMessage(err)}`)
+            logger.debug(`get_robot_uin_range 调用失败 ${errorMessage(err)}`)
         }
         robotUinRangeCache.set(cacheKey, ranges)
         return ranges
@@ -292,20 +292,16 @@ export function apply(ctx: Context, config: Config) {
         const selfId = getBotSelfId(bot)
         const botsNeeded = N - threshold
 
-        // 号段模式：开关开启时改用 get_robot_uin_range 号段区间判定官方机器人
-        // （适配器 is_robot 字段失效时的临时方案）。号段拿不到则回退 is_robot。
-        let robotRanges: { min: number; max: number }[] | null = null
-        let useRangeMode = false
+        // 号段模式：开关开启时用 get_robot_uin_range 号段区间判定官方机器人。
+        let robotRanges: { min: number; max: number }[] = []
+        const useRangeMode = config.logging.smallGroupRobotUinRangeMode
         if (config.logging.smallGroupRobotUinRangeMode) {
-            robotRanges = await getRobotUinRanges(bot)
-            useRangeMode = robotRanges !== null
-            if (useRangeMode) {
-                logger.event('smallGroup.robotUinRange', { guildId, ranges: robotRanges!.length }, 'debug')
-            }
+            robotRanges = await getRobotUinRanges(bot) ?? []
+            logger.event('smallGroup.robotUinRange', { guildId, ranges: robotRanges.length }, 'debug')
         }
         const isBot = (m: OneBotMember): boolean => {
             if (selfId && getMemberUserId(m) === selfId) return true
-            if (useRangeMode) return isUinInRobotRange(getMemberUserId(m), robotRanges!)
+            if (useRangeMode) return isUinInRobotRange(getMemberUserId(m), robotRanges)
             return m.is_robot === true
         }
 
