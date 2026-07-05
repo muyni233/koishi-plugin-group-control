@@ -108,6 +108,7 @@ export interface MessagesConfig {
     inviteAdminApproveNotificationMessage: string
     inviteWaitPrompt: string
     inviteApprovePrompt: string
+    inviteAutoApprovePrompt: string
     inviteRejectPrompt: string
     inviteBlacklistRejectPrompt: string
     inviteBlacklistRejectNotification: string
@@ -240,7 +241,8 @@ export const Config: Schema<Config> = Schema.intersect([
             Schema.object({
                 // —— 私聊邀请人反馈提示 ——
                 inviteWaitPrompt: Schema.string().role('textarea').default('已收到您的群聊邀请，管理员正在审核中，请耐心等待~').description('人工审核时发给邀请者的等待提示'),
-                inviteApprovePrompt: Schema.string().role('textarea').default('您的群聊邀请已通过审核，机器人正在加入群聊。').description('群邀请通过后发给邀请者的提示'),
+                inviteApprovePrompt: Schema.string().role('textarea').default('您的群聊邀请已通过审核，机器人正在加入群聊。').description('手动审核通过后发给邀请者的提示'),
+                inviteAutoApprovePrompt: Schema.string().role('textarea').default('已自动同意您的群聊邀请，机器人正在加入群聊。').description('自动同意群邀请后发给邀请者的提示'),
                 inviteRejectPrompt: Schema.string().role('textarea').default('很抱歉，您的群聊邀请未通过审核，机器人将不会加入该群聊。').description('群邀请被拒后发给邀请者的提示'),
                 inviteBlacklistRejectPrompt: Schema.string().role('textarea').default('很抱歉，您邀请的群已被机器人拉黑，邀请已被自动拒绝。如有疑问，请联系机器人管理员。').description('群邀请命中黑名单时发给邀请者的提示'),
             }).description('私聊邀请人反馈提示'),

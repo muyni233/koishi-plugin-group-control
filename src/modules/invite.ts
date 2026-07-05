@@ -168,7 +168,7 @@ export function apply(ctx: Context, config: Config) {
 
             // 通知邀请者已自动通过
             try {
-                const approveMessage = escapeTpl(config.messages.inviteApprovePrompt, buildVars({
+                const approveMessage = escapeTpl(config.messages.inviteAutoApprovePrompt, buildVars({
                     groupName, groupId, userName, userId,
                 }))
                 await bot.sendPrivateMessage(userId, approveMessage)

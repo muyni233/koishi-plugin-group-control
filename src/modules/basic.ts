@@ -388,6 +388,15 @@ export function apply(ctx: Context, config: Config) {
         }
     }
 
+    async function notifyAdminInviteApproved(bot: OneBotBot, guildId: string, userId: string): Promise<void> {
+        const groupName = await getGroupName(bot, guildId, logger)
+        const userName = await getUserName(bot, userId, guildId, logger)
+        const msg = escapeTpl(config.messages.inviteAdminApproveNotificationMessage, buildVars({
+            groupName, groupId: guildId, userName, userId,
+        }))
+        await notifyAdmins(ctx, bot, config, msg)
+    }
+
     ctx.on('guild-added', async (session) => {
         const { platform } = session
         const guildId = parseGuildId(session.guildId)
@@ -430,15 +439,20 @@ export function apply(ctx: Context, config: Config) {
         if (config.basic.smallGroupAutoQuit) {
             const raw = getRawEvent(session)
             const operatorId = raw.operator_id ?? (session as Session & { operatorId?: string }).operatorId
+            const adminOperatorId = parseGuildId(operatorId)
             const addedByConfiguredAdmin = isConfiguredAdmin(config, operatorId)
-            if (addedByConfiguredAdmin && selfId) {
-                await markApprovedGuild(ctx, guildId, selfId)
-            }
-
             const inWhitelist = await isInSmallGroupWhitelist(ctx, guildId)
-            const wasApproved = addedByConfiguredAdmin || (selfId ? await isApprovedGuild(ctx, guildId, selfId) : false)
+            const alreadyApproved = selfId ? await isApprovedGuild(ctx, guildId, selfId) : false
             const pendingInvite = await getPendingInvite(ctx, platform, guildId, selfId)
             const hadPendingInvite = !!pendingInvite
+            if (addedByConfiguredAdmin && selfId) {
+                await markApprovedGuild(ctx, guildId, selfId)
+                if (!alreadyApproved && !hadPendingInvite && adminOperatorId) {
+                    await notifyAdminInviteApproved(bot, guildId, adminOperatorId)
+                }
+            }
+
+            const wasApproved = addedByConfiguredAdmin || alreadyApproved
             if (hadPendingInvite) await removePendingInvite(ctx, platform, guildId, selfId)
 
             if (inWhitelist || wasApproved || hadPendingInvite) {
