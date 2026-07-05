@@ -8,6 +8,7 @@ import { parseGuildId } from './utils-id'
 declare module '@satorijs/core' {
     interface Events {
         'help/command'(output: string[], command: Command, session: Session): void
+        'guild-member'(session: Session): void
     }
 }
 
