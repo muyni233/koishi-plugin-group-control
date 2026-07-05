@@ -1,6 +1,6 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl, buildVars } from '../utils'
+import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl, buildVars, isConfiguredAdmin } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
     asOneBotBot, OneBotBot, OneBotInternalRaw, OneBotMember,
@@ -10,7 +10,7 @@ import { createLogger, errorMessage, ScopedLogger } from '../logger'
 import {
     isInSmallGroupWhitelist, getPendingInvite, removePendingInvite,
     markSelfLeft, consumeSelfLeft, clearSelfLeft, clearExpiredSelfLeft,
-    blacklistKicked, createBlacklistedGuild, isApprovedGuild, clearApprovedGuild,
+    blacklistKicked, createBlacklistedGuild, markApprovedGuild, isApprovedGuild, clearApprovedGuild,
     getBlacklistedGuild, getGroupBotStatus, BLACKLIST_PLATFORM,
 } from '../database'
 
@@ -428,8 +428,15 @@ export function apply(ctx: Context, config: Config) {
         // 小群/黑名单群不发欢迎；豁免群（白名单/已审核/待处理邀请）直接欢迎；
         // 未审核群先做小群检测，确认非小群后再欢迎。
         if (config.basic.smallGroupAutoQuit) {
+            const raw = getRawEvent(session)
+            const operatorId = raw.operator_id ?? (session as Session & { operatorId?: string }).operatorId
+            const addedByConfiguredAdmin = isConfiguredAdmin(config, operatorId)
+            if (addedByConfiguredAdmin && selfId) {
+                await markApprovedGuild(ctx, guildId, selfId)
+            }
+
             const inWhitelist = await isInSmallGroupWhitelist(ctx, guildId)
-            const wasApproved = await isApprovedGuild(ctx, guildId, selfId)
+            const wasApproved = addedByConfiguredAdmin || (selfId ? await isApprovedGuild(ctx, guildId, selfId) : false)
             const pendingInvite = await getPendingInvite(ctx, platform, guildId, selfId)
             const hadPendingInvite = !!pendingInvite
             if (hadPendingInvite) await removePendingInvite(ctx, platform, guildId, selfId)
@@ -581,22 +588,24 @@ export function apply(ctx: Context, config: Config) {
     })
 
     // 被禁言通知 / 被长时间禁言自动退群拉黑
-    ctx.on('guild-member/ban', async (session: Session) => {
+    ctx.on('guild-member', async (session: Session) => {
         if (!config.basic.notifyAdminOnMute && !config.basic.muteAutoQuit) return
+        const raw = getRawEvent(session)
+        const subtype = (session as Session & { subtype?: string }).subtype
+        if (subtype !== 'ban' || String(raw.notice_type ?? '') !== 'group_ban') return
 
         // 只关心 bot 自己被禁言
         const bot = asOneBotBot(session.bot)
         const selfId = getBotSelfId(bot) ?? ''
-        if (parseGuildId(session.userId) !== selfId) return
+        if (parseGuildId(raw.user_id ?? session.userId) !== selfId) return
         // duration 为 0表示解除禁言，不处理
-        const sessionExt = session as Session & { duration?: number; operatorId?: string }
-        if (!sessionExt.duration) return
+        const duration = Number(raw.duration ?? 0)
+        if (!duration) return
 
         const { platform } = session
-        const guildId = parseGuildId(session.guildId)
+        const guildId = parseGuildId(raw.group_id ?? session.guildId)
         if (!guildId) return
-        const userId = sessionExt.operatorId || ''
-        const duration = sessionExt.duration ?? 0
+        const userId = parseGuildId(raw.operator_id) ?? ''
         const groupName = await getGroupName(bot, guildId, logger)
         const userName = await getUserName(bot, userId, guildId, logger)
 

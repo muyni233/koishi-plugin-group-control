@@ -1,8 +1,8 @@
 import { Context } from 'koishi'
 import { Config } from '../config'
-import { notifyAdmins, escapeTpl, buildVars, hasAdminRole } from '../utils'
+import { notifyAdmins, escapeTpl, buildVars, isConfiguredAdmin } from '../utils'
 import { parseGuildId } from '../utils-id'
-import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent, OneBotMember } from '../types'
+import { asOneBotBot, OneBotBot, getBotSelfId, getRawEvent } from '../types'
 import { createLogger, errorMessage } from '../logger'
 import {
     addPendingInvite, clearExpiredPendingInvites,
@@ -151,32 +151,7 @@ export function apply(ctx: Context, config: Config) {
         }, 'debug')
 
         // 自动同意逻辑（如果邀请者是管理员，或者开启了 autoApprove 自动同意）
-        const primaryAdmins = config.admin.primaryAdmins ?? []
-        const deputyAdmins = config.admin.deputyAdmins ?? []
-        let isAdminInviter = primaryAdmins.includes(userId!)
-            || primaryAdmins.includes(rawUserId!)
-            || deputyAdmins.includes(userId!)
-            || deputyAdmins.includes(rawUserId!)
-
-        // 如果并非直属管理员，但该成员是通知群（大群）的管理员/群主，同样视为管理员邀请并自动豁免
-        if (!isAdminInviter && config.admin.notificationGroupId) {
-            const notificationGroupId = config.admin.notificationGroupId
-            try {
-                const member = await bot.getGuildMember(notificationGroupId, userId!)
-                if (hasAdminRole(member as any)) {
-                    isAdminInviter = true
-                }
-            } catch {
-                try {
-                    const info = await bot.internal.getGroupMemberInfo(notificationGroupId, userId!)
-                    if (hasAdminRole(info)) {
-                        isAdminInviter = true
-                    }
-                } catch {
-                    // 忽略
-                }
-            }
-        }
+        const isAdminInviter = isConfiguredAdmin(config, userId) || isConfiguredAdmin(config, rawUserId)
 
         if (isAdminInviter || config.invite.autoApprove) {
             try {

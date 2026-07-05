@@ -79,6 +79,16 @@ export function buildVars(opts: MessageVars): Record<string, string | number> {
     }
 }
 
+export function isConfiguredAdmin(config: Config, userId: string | number | undefined | null): boolean {
+    const id = parseGuildId(userId)
+    if (!id) return false
+    const admins = [
+        ...(config.admin.primaryAdmins ?? []),
+        ...(config.admin.deputyAdmins ?? []),
+    ]
+    return admins.some(admin => parseGuildId(admin) === id)
+}
+
 export type TargetDomain = 'group' | 'friend'
 
 export interface ResolvedTarget {

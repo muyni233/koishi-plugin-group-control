@@ -430,7 +430,7 @@ export function apply(ctx: Context, config: Config) {
                 if (groupId == null) return '请输入有效的群号。'
                 return await debugMemberList(asOneBotBot(session.bot), groupId)
             })
-        ctx.command('gc.debug.member <groupId:text> <userId:text>', '单个成员原始字段', cmdOpts)
+        ctx.command('gc.debug.member <groupId:string> <userId:string>', '单个成员原始字段', cmdOpts)
             .action(async ({ session }, groupIdInput, userIdInput) => {
                 if (!session) return ''
                 if (!hasAdminPermission(session, config)) return '权限不足。'
