@@ -167,7 +167,7 @@ async function doReject(ctx: Context, config: Config, session: Session, arg: str
 
 async function doBan(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
     if (!hasAdminPermission(session, config)) return '权限不足。'
-    const r = await resolveBanTarget(session, arg)
+    const r = await resolveBanTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const id = r.target.id
     const bot = asOneBotBot(session.bot)
@@ -216,7 +216,7 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
 
 async function doUnban(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
     if (!hasAdminPermission(session, config)) return '权限不足。'
-    const r = await resolveBanTarget(session, arg)
+    const r = await resolveBanTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const id = r.target.id
 

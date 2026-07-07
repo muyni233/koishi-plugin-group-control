@@ -1,11 +1,55 @@
 import { Context, Session } from 'koishi'
 import { getQuotedText, parseQuotedTarget, parseTargetArg, type ResolvedTarget, type TargetDomain } from './utils'
-import { getBotSelfId } from './types'
+import { asOneBotBot, getBotSelfId, OneBotFriend, OneBotGroupInfo } from './types'
 import {
     getPendingInvite, getPendingFriendRequest, getAllPendingInvites, getAllPendingFriendRequests,
+    getBlacklistedGuild, getBlacklistedFriend,
 } from './database'
 
 export type ResolveResult = { ok: true, target: ResolvedTarget } | { ok: false, message: string }
+type TargetDetection = ResolvedTarget | null | 'ambiguous'
+
+function targetFromDomains(id: string, domains: Set<TargetDomain>): TargetDetection {
+    if (domains.size > 1) return 'ambiguous'
+    const [domain] = domains
+    return domain ? { domain, id } : null
+}
+
+function ambiguousTargetMessage(id: string, detail = '同时匹配群聊和好友'): string {
+    return `号码 ${id} ${detail}，请加前缀区分：group:${id}（群）/ friend:${id}（好友）。`
+}
+
+async function collectPendingDomains(ctx: Context, session: Session, selfId: string, id: string, domains: Set<TargetDomain>): Promise<void> {
+    if (await getPendingInvite(ctx, session.platform, id, selfId)) domains.add('group')
+    if (await getPendingFriendRequest(ctx, session.platform, selfId, id)) domains.add('friend')
+}
+
+async function detectPendingTarget(ctx: Context, session: Session, selfId: string, id: string): Promise<TargetDetection> {
+    const domains = new Set<TargetDomain>()
+    await collectPendingDomains(ctx, session, selfId, id, domains)
+    return targetFromDomains(id, domains)
+}
+
+async function detectKnownTarget(ctx: Context, session: Session, id: string): Promise<TargetDetection> {
+    const domains = new Set<TargetDomain>()
+    const selfId = getBotSelfId(session.bot)
+
+    if (selfId) await collectPendingDomains(ctx, session, selfId, id, domains)
+    if ((await getBlacklistedGuild(ctx, id)).length > 0) domains.add('group')
+    if (await getBlacklistedFriend(ctx, id)) domains.add('friend')
+
+    const bot = asOneBotBot(session.bot)
+    try {
+        const groups = await bot.internal.getGroupList() as OneBotGroupInfo[]
+        if (groups.some(g => String(g.group_id ?? g.groupId ?? '') === id)) domains.add('group')
+    } catch { /* ignore unavailable list api */ }
+    try {
+        const friends = await bot.internal.getFriendList() as OneBotFriend[]
+        if (friends.some(f => String(f.user_id ?? f.userId ?? '') === id)) domains.add('friend')
+    } catch { /* ignore unavailable list api */ }
+
+    return targetFromDomains(id, domains)
+}
 
 /**
  * approve/reject 目标：合法参数 > 引用通知 > 单条自动选用。
@@ -20,13 +64,11 @@ export async function resolvePendingTarget(ctx: Context, session: Session, arg: 
         if (p) {
             if ('domain' in p) return { ok: true, target: p }
             const id = p.bare
-            const gi = await getPendingInvite(ctx, session.platform, id, selfId)
-            const fr = await getPendingFriendRequest(ctx, session.platform, selfId, id)
-            if (gi && fr) {
-                return { ok: false, message: `号码 ${id} 同时存在待处理群邀请和好友申请，请加前缀区分：group:${id}（群）/ friend:${id}（好友）。` }
+            const detected = await detectPendingTarget(ctx, session, selfId, id)
+            if (detected === 'ambiguous') {
+                return { ok: false, message: ambiguousTargetMessage(id, '同时存在待处理群邀请和好友申请') }
             }
-            if (gi) return { ok: true, target: { domain: 'group', id } }
-            if (fr) return { ok: true, target: { domain: 'friend', id } }
+            if (detected) return { ok: true, target: detected }
             return { ok: false, message: `未找到号码 ${id} 的待处理请求。使用 gc.pending 查看待处理列表。` }
         }
         // 参数不是合法号码（可能是回复带上的被引用文本）→ 落到引用解析
@@ -47,12 +89,17 @@ export async function resolvePendingTarget(ctx: Context, session: Session, arg: 
     return { ok: false, message: `当前有 ${total} 条待处理请求，请指定号码或引用对应通知；使用 gc.pending 查看列表。` }
 }
 
-/** ban/unban 目标：合法参数 > 引用通知；裸号默认按群。 */
-export async function resolveBanTarget(session: Session, arg: string | undefined): Promise<ResolveResult> {
+/** ban/unban 目标：合法参数 > 引用通知；裸号按现有状态识别，无法识别时兼容为群。 */
+export async function resolveBanTarget(ctx: Context, session: Session, arg: string | undefined): Promise<ResolveResult> {
     if (arg) {
         const p = parseTargetArg(arg)
         if (p) {
             if ('domain' in p) return { ok: true, target: p }
+            const detected = await detectKnownTarget(ctx, session, p.bare)
+            if (detected === 'ambiguous') {
+                return { ok: false, message: ambiguousTargetMessage(p.bare) }
+            }
+            if (detected) return { ok: true, target: detected }
             return { ok: true, target: { domain: 'group', id: p.bare } }
         }
     }
