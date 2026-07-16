@@ -3,7 +3,7 @@ import { Config } from '../config'
 import { notifyAdmins, hasGuildPermission, getAdminCommandOptions, escapeTpl, buildVars, isConfiguredAdmin } from '../utils'
 import { parseGuildId, toOneBotNumber } from '../utils-id'
 import {
-    asOneBotBot, OneBotBot, OneBotInternalRaw, OneBotMember,
+    asOneBotBot, OneBotBot, OneBotGroupInfo, OneBotInternalRaw, OneBotMember,
     getBotSelfId, getMemberUserId, getRawEvent,
 } from '../types'
 import { createLogger, errorMessage, ScopedLogger } from '../logger'
@@ -172,6 +172,32 @@ export function apply(ctx: Context, config: Config) {
     const ADD_DEDUP_MS = 10 * 1000        // 10秒内同一群的 guild-added 视为重放
     const REALTIME_DEBOUNCE_MS = 1500     // 实时复检前的防抖（合并瞬时连续退群）
 
+    /** 写入主动退群标记后执行退群；失败时统一回滚内存与数据库标记。 */
+    async function performMarkedLeave(
+        bot: OneBotBot,
+        platform: string,
+        guildId: string,
+        reason: string,
+    ): Promise<boolean> {
+        const selfId = getBotSelfId(bot) ?? ''
+        const dedupKey = makeGuildKey(platform, selfId, guildId)
+        quittingGuilds.set(dedupKey, Date.now())
+        try {
+            await markSelfLeft(ctx, guildId, selfId)
+            await leaveGroup(bot, guildId)
+            return true
+        } catch (err) {
+            logger.error(`${reason}失败 guildId=${guildId}`, err)
+            quittingGuilds.delete(dedupKey)
+            try {
+                await clearSelfLeft(ctx, guildId, selfId)
+            } catch (clearErr) {
+                logger.warn(`回滚主动退群标记失败 guildId=${guildId}`, clearErr)
+            }
+            return false
+        }
+    }
+
     function isRecent(map: Map<string, number>, key: string, ttl: number): boolean {
         const time = map.get(key)
         if (!time) return false
@@ -335,9 +361,7 @@ export function apply(ctx: Context, config: Config) {
         guildId: string,
         groupName: string,
         memberCount: number,
-    ): Promise<void> {
-        const selfId = getBotSelfId(bot) ?? ''
-        const dedupKey = makeGuildKey(platform, selfId, guildId)
+    ): Promise<boolean> {
         const threshold = config.basic.smallGroupThreshold
         const quitMsg = escapeTpl(config.messages.smallGroupQuitMessage, buildVars({
             memberCount, threshold, groupName, groupId: guildId,
@@ -356,16 +380,7 @@ export function apply(ctx: Context, config: Config) {
             await notifyAdmins(ctx, bot, config, adminMsg)
         }
 
-        // 标记为主动退出，避免触发被踢拉黑逻辑
-        quittingGuilds.set(dedupKey, Date.now())
-        await markSelfLeft(ctx, guildId, selfId)
-        try {
-            await leaveGroup(bot, guildId)
-        } catch (err) {
-            logger.error(`小群自动退群失败 guildId=${guildId}`, err)
-            quittingGuilds.delete(dedupKey)
-            await clearSelfLeft(ctx, guildId, selfId)
-        }
+        return performMarkedLeave(bot, platform, guildId, '小群自动退群')
     }
 
     /** 发送欢迎消息。bot-off（群开关关闭）时不发送——事件监听器不走中间件，需在此显式判断。 */
@@ -418,13 +433,7 @@ export function apply(ctx: Context, config: Config) {
                 } catch (err) {
                     logger.debug(`黑名单提示发送失败 guildId=${guildId} ${errorMessage(err)}`)
                 }
-                quittingGuilds.set(addKey, Date.now())
-                await markSelfLeft(ctx, guildId, selfId)
-                try {
-                    await leaveGroup(bot, guildId)
-                } catch (err) {
-                    logger.warn(`退出黑名单群失败 guildId=${guildId}`, err)
-                }
+                await performMarkedLeave(bot, platform, guildId, '退出黑名单群')
                 return
             }
         }
@@ -541,13 +550,17 @@ export function apply(ctx: Context, config: Config) {
         const platform = BLACKLIST_PLATFORM
         const dedupKey = makeGuildKey(platform, selfId, guildId)
 
-        // 离开群（无论主动退/被踢）即清除「已审核」标记
-        try { await clearApprovedGuild(ctx, guildId, selfId) } catch (err) {
-            logger.debug(`清理 approvedGuild 失败 guildId=${guildId} ${errorMessage(err)}`)
+        async function clearApproval(): Promise<void> {
+            try {
+                await clearApprovedGuild(ctx, guildId!, selfId)
+            } catch (err) {
+                logger.debug(`清理 approvedGuild 失败 guildId=${guildId} ${errorMessage(err)}`)
+            }
         }
 
         // 1) 在进程内主动退群的，快速放行（同时消费持久标记，防止堆积）
         if (quittingGuilds.has(dedupKey)) {
+            await clearApproval()
             try { await clearSelfLeft(ctx, guildId, selfId) } catch (err) {
                 logger.debug(`清理 selfLeft 失败 guildId=${guildId} ${errorMessage(err)}`)
             }
@@ -556,7 +569,10 @@ export function apply(ctx: Context, config: Config) {
 
         // 2) 持久化主动退群标记：跨重启/HMR 仍然有效
         const isSelfLeft = await consumeSelfLeft(ctx, guildId, selfId)
-        if (isSelfLeft) return
+        if (isSelfLeft) {
+            await clearApproval()
+            return
+        }
 
         // 3) 根据 OneBot 原始事件判断是主动退 (leave) 还是被踢 (kick_me/kick)
         const raw = getRawEvent(session)
@@ -565,10 +581,37 @@ export function apply(ctx: Context, config: Config) {
         const ageSec = Math.floor(Date.now() / 1000) - eventTs
 
         // 明确的主动退群 (OneBot group_decrease sub_type === 'leave')
-        if (subType === 'leave') return
+        if (subType === 'leave') {
+            await clearApproval()
+            return
+        }
 
-        // 4) 过旧事件：可能是重连重放，忽略（仅在无 sub_type 时兜底）
-        if (!subType && ageSec > 60) return
+        // 4) 仅明确的 kick/kick_me 直接视为被踢。缺失 sub_type 时先确认机器人确实已不在群中，
+        // 避免适配器重连或字段缺失造成误拉黑。
+        if (subType && subType !== 'kick' && subType !== 'kick_me') {
+            logger.warn(`忽略未知 guild-removed 子类型 guildId=${guildId} subType=${subType}`)
+            return
+        }
+        if (!subType) {
+            if (ageSec > 60) return
+            try {
+                const groups = await bot.internal.getGroupList() as OneBotGroupInfo[]
+                const stillJoined = groups.some(group => {
+                    const id = group.group_id ?? group.groupId
+                    return parseGuildId(id) === guildId
+                })
+                if (stillJoined) {
+                    logger.warn(`guild-removed 缺少 sub_type，但机器人仍在群中，已忽略 guildId=${guildId}`)
+                    return
+                }
+            } catch (err) {
+                logger.warn(`guild-removed 缺少 sub_type，且无法确认机器人是否离群，已跳过自动拉黑 guildId=${guildId}`, err)
+                return
+            }
+        }
+
+        // 已确认机器人离群，无论主动退或被踢均清除审核豁免。
+        await clearApproval()
 
         // 5) 进程内去重（同名群 60s 内只处理一次）
         if (isRecent(processedKicks, dedupKey, KICK_DEDUP_MS)) return
@@ -634,16 +677,7 @@ export function apply(ctx: Context, config: Config) {
             }
 
             // 标记主动退群并退出（被禁言状态下无法发群消息，故不再尝试群内提示）
-            const dedupKey = makeGuildKey(platform, selfId, guildId)
-            quittingGuilds.set(dedupKey, Date.now())
-            await markSelfLeft(ctx, guildId, selfId)
-            try {
-                await leaveGroup(bot, guildId)
-            } catch (err) {
-                logger.error(`被禁言自动退群失败 guildId=${guildId}`, err)
-                quittingGuilds.delete(dedupKey)
-                await clearSelfLeft(ctx, guildId, selfId)
-            }
+            await performMarkedLeave(bot, platform, guildId, '被禁言自动退群')
             return
         }
 
@@ -675,8 +709,6 @@ export function apply(ctx: Context, config: Config) {
                 const guildId = parseGuildId(session.guildId)
                 if (!guildId) return '当前群号格式无效，无法退出。'
                 const bot = asOneBotBot(session.bot)
-                const selfId = getBotSelfId(bot) ?? ''
-                const dedupKey = makeGuildKey(platform, selfId, guildId)
 
                 // 获取群名称（此时还在群内，应该能拿到）
                 const groupName = await getGroupName(bot, guildId, logger)
@@ -689,20 +721,13 @@ export function apply(ctx: Context, config: Config) {
                 )
                 await notifyAdmins(ctx, bot, config, adminMsg)
 
-                quittingGuilds.set(dedupKey, Date.now())
-                await markSelfLeft(ctx, guildId, selfId)
                 try {
                     await bot.sendMessage(session.guildId, escapeTpl(config.messages.quitMessage, buildVars({ userId, userName })), platform)
                 } catch (err) {
                     logger.debug(`quit 群内提示发送失败 guildId=${guildId} ${errorMessage(err)}`)
                 }
-                try {
-                    await leaveGroup(bot, guildId)
-                } catch (err) {
-                    quittingGuilds.delete(dedupKey)
-                    await clearSelfLeft(ctx, guildId, selfId)
-                    return `退出失败: ${errorMessage(err)}`
-                }
+                const left = await performMarkedLeave(bot, platform, guildId, '执行 quit 退群')
+                if (!left) return '退出失败，请查看日志。'
                 return ''
             })
     }

@@ -140,8 +140,8 @@ export const Config: Schema<Config> = Schema.intersect([
     Schema.object({
         admin: Schema.object({
             primaryAdmins: Schema.array(String).default([]).description('主管理员QQ号列表（绕过群管理员指令校验；通知默认发给首个主管理员）'),
-            deputyAdmins: Schema.array(String).default([]).description('副管理员QQ号列表（可用 gc 指令，其它群管理员指令仍会校验身份）'),
-            notificationGroupId: Schema.string().description('通知群号（填写后发到此群，否则私聊首个主管理员）'),
+            deputyAdmins: Schema.array(String).default([]).description('副管理员QQ号列表（可用 gc 指令；配置通知群后只能在通知群中使用）'),
+            notificationGroupId: Schema.string().description('通知群号（填写后通知发到此群，且副管理员只能在此群使用 gc 指令；否则私聊首个主管理员）'),
         }).description('管理员配置'),
     }),
     Schema.object({
@@ -168,7 +168,7 @@ export const Config: Schema<Config> = Schema.intersect([
             smallGroupCheckDelay: Schema.natural().default(3000).description('入群后延迟检测的时间（毫秒），等待成员列表就绪'),
             smallGroupNotifyAdmin: Schema.boolean().default(true).description('小群自动退群时通知管理员'),
             // —— 实时小群监控 ——
-            smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控：监听成员退群事件，群缩小到阈值以下时再次自动退群'),
+            smallGroupRealtimeMonitor: Schema.boolean().default(true).description('实时监控：监听成员退群事件，群缩小到阈值或以下时再次自动退群'),
             smallGroupRecheckCooldown: Schema.natural().default(60).description('实时监控：同一群两次复检的最小间隔（秒），避免成员批量退群时频繁调接口'),
             // —— 合格小群通知 ——
             smallGroupQualifiedNotifyAdmin: Schema.boolean().default(true).description('被未经审核拉入但人数达标的群是否通知管理员'),
@@ -232,7 +232,7 @@ export const Config: Schema<Config> = Schema.intersect([
                 welcomeMessage: Schema.string().role('textarea').default('大家好，我是本群的机器人，请多关照~').description('加入群聊时发送的欢迎消息'),
                 quitMessage: Schema.string().role('textarea').default('收到 {userId} 的指令，机器人即将退出本群。').description('quit 指令触发后的群内提示'),
                 blacklistMessage: Schema.string().role('textarea').default('本群已被拉黑，机器人将自动退出。如有疑问，请联系管理员。').description('被拉入黑名单群后的群内提示'),
-                smallGroupQuitMessage: Schema.string().role('textarea').default('本群人数不足（当前{memberCount}人，需≥{threshold}人），机器人即将退出本群，如有需求请联系管理员。').description('小群自动退群时的群内提示'),
+                smallGroupQuitMessage: Schema.string().role('textarea').default('本群人数不足（当前{memberCount}人，需超过{threshold}人），机器人即将退出本群，如有需求请联系管理员。').description('小群自动退群时的群内提示'),
                 frequencyWarnMessage: Schema.string().default('发言有点快哦，慢一点吧~').description('频率首次超限时的警告消息'),
                 frequencyBlockMessage: Schema.string().default('发言频率过高，已限制发言 {duration} 秒。').description('进入屏蔽时的通知'),
                 frequencyBlockedMessage: Schema.string().default('发言限制还没解除，再等 {time} 秒吧~').description('屏蔽期间再次触发时的提示'),

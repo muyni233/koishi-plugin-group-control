@@ -165,15 +165,17 @@ export function isPrimaryAdmin(session: Session, config: Config): boolean {
         const user = session.user as { authority?: number } | undefined
         return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
     }
-    if (!session.userId) return false
-    return config.admin.primaryAdmins?.includes(session.userId) ?? false
+    const userId = parseGuildId(session.userId)
+    if (!userId) return false
+    return config.admin.primaryAdmins?.some(admin => parseGuildId(admin) === userId) ?? false
 }
 
 /** 是否为副管理员（填在 deputyAdmins 里的；koishi 模式不区分主副，恒为 false） */
 export function isDeputyAdmin(session: Session, config: Config): boolean {
     if (config.permission.mode === 'koishi') return false
-    if (!session.userId) return false
-    return config.admin.deputyAdmins?.includes(session.userId) ?? false
+    const userId = parseGuildId(session.userId)
+    if (!userId) return false
+    return config.admin.deputyAdmins?.some(admin => parseGuildId(admin) === userId) ?? false
 }
 
 /** 是否为全局管理员（=主管理员）。builtin 模式认 primaryAdmins；koishi 模式由 authority 决定 */
@@ -188,6 +190,27 @@ export function hasAdminPermission(session: Session, config: Config): boolean {
         return typeof user?.authority === 'number' && user.authority >= config.permission.koishiAuthority
     }
     return isPrimaryAdmin(session, config) || isDeputyAdmin(session, config)
+}
+
+/**
+ * gc 系列指令的统一权限检查。
+ *
+ * builtin 模式下，副管理员的权限来自插件配置而非 Koishi/群角色。配置了通知群后，
+ * 这类特殊权限仅在通知群内生效；主管理员不受会话位置限制。Koishi authority 模式
+ * 不区分主副管理员，因此沿用 authority 判断。
+ */
+export function getAdminCommandPermissionError(session: Session, config: Config): string | null {
+    if (config.permission.mode === 'koishi') {
+        return hasAdminPermission(session, config) ? null : '权限不足。'
+    }
+    if (isPrimaryAdmin(session, config)) return null
+    if (!isDeputyAdmin(session, config)) return '权限不足。'
+
+    const notificationGroupId = parseGuildId(config.admin.notificationGroupId)
+    if (!notificationGroupId) return null
+    const currentGuildId = parseGuildId(session.guildId)
+    if (currentGuildId === notificationGroupId) return null
+    return '已配置审核通知群，请到审核群中处理该请求。'
 }
 
 const GUILD_ADMIN_CACHE_TTL = 30 * 1000

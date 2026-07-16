@@ -1,7 +1,7 @@
 import { Context, Session } from 'koishi'
 import { Config } from '../config'
 import {
-    isBlacklistEnabled, getAdminCommandOptions, hasAdminPermission, escapeTpl, buildVars,
+    isBlacklistEnabled, getAdminCommandOptions, getAdminCommandPermissionError, escapeTpl, buildVars,
 } from '../utils'
 import { toOneBotNumber, formatDate } from '../utils-id'
 import { asOneBotBot, getBotSelfId, OneBotBot, OneBotForwardNode, OneBotFriend, OneBotGroupInfo, OneBotMember } from '../types'
@@ -20,6 +20,10 @@ import {
 export const name = 'group-control-commands'
 
 const SCOPE = 'group-control:commands'
+
+function checkAdminPermission(session: Session, config: Config): string | null {
+    return getAdminCommandPermissionError(session, config)
+}
 
 /** 将数组按 size 切片 */
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -93,7 +97,8 @@ async function isBotInGroup(bot: OneBotBot, guildId: string): Promise<boolean> {
 // ── 统一动作 ──────────────────────────────────────────────
 
 async function doApprove(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
-    if (!hasAdminPermission(session, config)) return '权限不足。'
+    const permissionError = checkAdminPermission(session, config)
+    if (permissionError) return permissionError
     const r = await resolvePendingTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const bot = asOneBotBot(session.bot)
@@ -132,7 +137,8 @@ async function doApprove(ctx: Context, config: Config, session: Session, arg: st
 }
 
 async function doReject(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
-    if (!hasAdminPermission(session, config)) return '权限不足。'
+    const permissionError = checkAdminPermission(session, config)
+    if (permissionError) return permissionError
     const r = await resolvePendingTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const bot = asOneBotBot(session.bot)
@@ -166,7 +172,8 @@ async function doReject(ctx: Context, config: Config, session: Session, arg: str
 }
 
 async function doBan(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
-    if (!hasAdminPermission(session, config)) return '权限不足。'
+    const permissionError = checkAdminPermission(session, config)
+    if (permissionError) return permissionError
     const r = await resolveBanTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const id = r.target.id
@@ -215,7 +222,8 @@ async function doBan(ctx: Context, config: Config, session: Session, arg: string
 }
 
 async function doUnban(ctx: Context, config: Config, session: Session, arg: string | undefined): Promise<string> {
-    if (!hasAdminPermission(session, config)) return '权限不足。'
+    const permissionError = checkAdminPermission(session, config)
+    if (permissionError) return permissionError
     const r = await resolveBanTarget(ctx, session, arg)
     if (!r.ok) return r.message
     const id = r.target.id
@@ -244,7 +252,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.pending', '查看待处理请求', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const selfId = getBotSelfId(asOneBotBot(session.bot))
             if (!selfId) return '无法识别当前机器人账号，已取消操作。'
             const invites = await getAllPendingInvites(ctx, session.platform, selfId)
@@ -282,7 +291,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.banlist', '查看黑名单', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const groups = await getAllBlacklistedGuilds(ctx)
             const friends = await getAllBlacklistedFriends(ctx)
             if (groups.length === 0 && friends.length === 0) return '黑名单为空。'
@@ -299,7 +309,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.clearban', '清空群黑名单', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const errorMsg = isBlacklistEnabled(config.basic); if (errorMsg) return errorMsg
             const records = await getAllBlacklistedGuilds(ctx)
             if (records.length === 0) return '群黑名单已是空的。'
@@ -311,7 +322,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.sg-add [target:string]', '解除小群人数限制', cmdOpts)
         .action(async ({ session }, target) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const r = resolveFixedTarget(session, target, 'group')
             if (!r.ok) return r.message
             const guildId = r.target.id
@@ -323,7 +335,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.sg-rm [target:string]', '恢复小群人数限制', cmdOpts)
         .action(async ({ session }, target) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const r = resolveFixedTarget(session, target, 'group')
             if (!r.ok) return r.message
             const guildId = r.target.id
@@ -335,7 +348,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.sg-list', '查看小群白名单', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const records = await getAllSmallGroupWhitelist(ctx)
             if (records.length === 0) return '小群白名单为空。'
             await sendAsForward(session, `小群白名单（共 ${records.length} 个）`, records.map((r, i) => `${i + 1}. ${r.guildId}`))
@@ -346,7 +360,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.friends', '查看好友列表', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             let list: OneBotFriend[] = []
             try {
                 list = await asOneBotBot(session.bot).internal.getFriendList() as OneBotFriend[]
@@ -364,7 +379,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.del [target:string]', '删除好友', cmdOpts)
         .action(async ({ session }, target) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const r = resolveFixedTarget(session, target, 'friend')
             if (!r.ok) return r.message
             const userId = r.target.id
@@ -378,7 +394,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.leave [target:string]', '退出指定群', cmdOpts)
         .action(async ({ session }, target) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             const r = resolveFixedTarget(session, target, 'group')
             if (!r.ok) return r.message
             const guildId = r.target.id
@@ -400,7 +417,8 @@ export function apply(ctx: Context, config: Config) {
     ctx.command('gc.groups', '查看群列表', cmdOpts)
         .action(async ({ session }) => {
             if (!session) return ''
-            if (!hasAdminPermission(session, config)) return '权限不足。'
+            const permissionError = checkAdminPermission(session, config)
+            if (permissionError) return permissionError
             let list: OneBotGroupInfo[] = []
             try {
                 list = await asOneBotBot(session.bot).internal.getGroupList() as OneBotGroupInfo[]
@@ -425,7 +443,8 @@ export function apply(ctx: Context, config: Config) {
         ctx.command('gc.debug.member-list <groupId:text>', '成员列表 is_robot 分布', cmdOpts)
             .action(async ({ session }, input) => {
                 if (!session) return ''
-                if (!hasAdminPermission(session, config)) return '权限不足。'
+                const permissionError = checkAdminPermission(session, config)
+                if (permissionError) return permissionError
                 const groupId = toOneBotNumber(input)
                 if (groupId == null) return '请输入有效的群号。'
                 return await debugMemberList(asOneBotBot(session.bot), groupId)
@@ -433,7 +452,8 @@ export function apply(ctx: Context, config: Config) {
         ctx.command('gc.debug.member <groupId:string> <userId:string>', '单个成员原始字段', cmdOpts)
             .action(async ({ session }, groupIdInput, userIdInput) => {
                 if (!session) return ''
-                if (!hasAdminPermission(session, config)) return '权限不足。'
+                const permissionError = checkAdminPermission(session, config)
+                if (permissionError) return permissionError
                 const groupId = toOneBotNumber(groupIdInput)
                 const userId = toOneBotNumber(userIdInput)
                 if (groupId == null || userId == null) return '请输入有效的群号和 QQ 号。'
@@ -442,7 +462,8 @@ export function apply(ctx: Context, config: Config) {
         ctx.command('gc.debug.raw <groupId:text>', '成员列表原始 JSON', cmdOpts)
             .action(async ({ session }, input) => {
                 if (!session) return ''
-                if (!hasAdminPermission(session, config)) return '权限不足。'
+                const permissionError = checkAdminPermission(session, config)
+                if (permissionError) return permissionError
                 const groupId = toOneBotNumber(input)
                 if (groupId == null) return '请输入有效的群号。'
                 return await debugRawMemberList(asOneBotBot(session.bot), groupId, session)

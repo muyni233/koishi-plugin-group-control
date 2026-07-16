@@ -9,6 +9,7 @@ export const name = 'group-control-frequency'
 
 const SCOPE = 'group-control:frequency'
 const PRIVATE_GUILD_PREFIX = '__private__:'
+const MAX_BLOCK_DURATION = 24 * 60 * 60
 const frequencyLocks = new Map<string, Promise<void>>()
 const frequencyCache = new SimpleLRUCache<CommandFrequencyRecord>(1 * 60 * 60 * 1000, 5000)
 
@@ -18,8 +19,11 @@ function isBlocked(record: CommandFrequencyRecord | null): boolean {
 }
 
 function calcBlockDur(baseDur: number, expBase: number, blockCount: number): number {
-    if (expBase <= 1) return baseDur
-    return Math.round(baseDur * Math.pow(expBase, blockCount - 1))
+    const safeBaseDur = Math.max(0, Math.min(MAX_BLOCK_DURATION, Math.floor(baseDur)))
+    if (expBase <= 1 || blockCount <= 1) return safeBaseDur
+    const duration = safeBaseDur * Math.pow(expBase, blockCount - 1)
+    if (!Number.isFinite(duration)) return MAX_BLOCK_DURATION
+    return Math.min(MAX_BLOCK_DURATION, Math.max(0, Math.round(duration)))
 }
 
 function makeEmptyRecord(platform: string, guildId: string, now: number): CommandFrequencyRecord {
@@ -182,9 +186,16 @@ export function apply(ctx: Context, config: Config) {
     const logger = createLogger(ctx, SCOPE, config)
     const msgs = config.messages
 
+    ctx.on('dispose', () => {
+        frequencyCache.clear()
+        // 活动锁必须保留到任务 finally 自行释放，避免热重载的新实例绕过旧任务的互斥链。
+    })
+
     const groupWhitelist = new Set((freq.whitelist ?? []).map(id => parseGuildId(id) ?? id))
     const privateWhitelist = new Set((freq.privateWhitelist ?? []).map(id => parseGuildId(id) ?? id))
 
+    // 普通窗口计数和首次警告只保存在内存，避免逐消息写库；进程重启后允许重置。
+    // 数据库仅持久化屏蔽截止时间、处罚次数及屏蔽提示冷却等关键处罚状态。
     // 记录本条消息是否已被中间件计数，避免同一条消息（私聊指令 / @bot 指令）
     // 在中间件和 command/before-execute 中被重复计数（双重消耗频率额度）
     const countedSessions = new WeakSet<Session>()

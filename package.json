@@ -1,16 +1,16 @@
 {
   "name": "koishi-plugin-group-control",
   "description": "Koishi 插件，一个多功能的群聊自管理工具。支持被踢出自动拉黑、刷屏自动屏蔽、开关控制等功能。(仅支持 OneBot 适配器)",
-  "version": "1.1.0-rc.2",
+  "version": "1.1.0-rc.3",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "scripts": {
-    "test-tool": "node test-tool/server.js"
+    "test": "tsx --test tests/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "files": [
     "lib",
-    "dist",
-    "test-tool"
+    "dist"
   ],
   "homepage": "https://github.com/muyni233/koishi-plugin-group-control",
   "license": "MIT",
@@ -26,5 +26,11 @@
   ],
   "peerDependencies": {
     "koishi": "^4.18.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.2",
+    "yml-register": "^1.2.5"
   }
 }
